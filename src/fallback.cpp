@@ -74,8 +74,21 @@ Image MakeFallback(const char* name,int width,int height) {
         button(1,38,9,9,L"_",true);button(1,47,9,9,L"+",true);button(11,38,9,9,L"x");button(11,47,9,9,L"x",true);
     } else if(n=="pledit.bmp") {
         label(26,0,100,20,L"TTPlayer Playlist");label(26,21,100,20,L"TTPlayer Playlist");
-        const wchar_t* labels[]={L"ADD",L"REM",L"SEL",L"MISC",L"LIST"};
-        for(int i=0;i<5;++i) {int x=i==0?0:i==1?54:i==2?104:i==3?154:204;for(int j=0;j<2;++j) button(x+j*23,149,22,18,labels[i],j!=0);}
+        // Toolbar artwork lives in the two bottom strips, including LIST in
+        // the right-hand strip. These project-owned icons are used only when
+        // the skin does not supply that strip; never cover valid skin pixels.
+        const int xs[]={14,43,72,101,232};
+        const COLORREF ink=RGB(220,240,220);
+        for(int i=0;i<5;++i) {
+            const int x=xs[i];button(x,80,22,18,L"");
+            if(i<2) {fill(x+6,88,10,2,ink);if(i==0) fill(x+10,84,2,10,ink);}
+            else if(i==2) {
+                for(int step=0;step<4;++step) fill(x+5+step,88+step,2,2,ink);
+                for(int step=0;step<7;++step) fill(x+9+step,91-step,2,2,ink);
+            } else if(i==3) {
+                for(int y:{85,90}) for(int dx:{6,11}) fill(x+dx,y,4,4,ink);
+            } else for(int y:{84,88,92}) fill(x+6,y,10,2,ink);
+        }
         button(52,53,8,18,L"");button(61,53,8,18,L"",true);button(52,42,9,9,L"x",true);button(62,42,9,9,L"_",true);
         button(158,3,9,9,L"_");button(167,3,9,9,L"x");button(128,45,9,9,L"+");button(150,42,9,9,L"+",true);
     }

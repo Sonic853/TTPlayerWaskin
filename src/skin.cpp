@@ -377,8 +377,10 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
             Fill(dc,{12,y,width-20,y+1},current_);
         }
         Blit(dc,"pledit.bmp",width-15,20+(maximum?view.scroll*(height-76)/maximum:0),8,18,pressed==hitScroll?61:52,53);
-        const int xs[]={14,43,72,101,width-44},sx[]={0,54,104,154,204};
-        for(int i=0;i<5;++i) Blit(dc,"pledit.bmp",xs[i],height-29,22,18,sx[i]+(pressed==hitListAdd+i?23:0),149);
+        // draw_pl's bottom strips already contain the five toolbar icons.
+        // The y=111/130/149 cells belong to Winamp's expanded flyout menus;
+        // painting them here replaces custom icons with menu-item labels.
+        // This provider opens the host's native menus instead of that flyout.
         Text(dc,{width-143,height-28,width-53,height-22},statistics_.empty()?std::to_wstring(s.track_count):statistics_,normal_,true);
         if(s.playback==2 || (s.playback==3 && (ticks_/5)%2==0))
             Text(dc,{width-86,height-15,width-53,height-9},(s.elapsed?L"":L"-")+Time(s.elapsed?s.position_ms:std::max<int64_t>(0,s.duration_ms-s.position_ms)),normal_,true);
@@ -626,7 +628,7 @@ int Skin::Hit(const View& v,POINT p) const {
         const int rows=std::max(1,(int(r.bottom)-60)/row_height_);
         if(Inside(p,12,22,r.right-32,rows*row_height_)) return hitRow+v.scroll+(p.y-22)/row_height_;
         const int xs[]={14,43,72,101,int(r.right)-44};
-        for(int i=0;i<5;++i) if(Inside(p,xs[i],r.bottom-29,22,18)) return hitListAdd+i;
+        for(int i=0;i<5;++i) if(Inside(p,xs[i],r.bottom-30,22,18)) return hitListAdd+i;
         if(Inside(p,r.right-144,r.bottom-15,54,8)) return buttons[(p.x-(r.right-144))/9];
         if(Inside(p,r.right-87,r.bottom-18,34,10)) return TTP_SKIN_TIME_MODE;
         if(r.right>=350 && Inside(p,r.right-219,r.bottom-28,70,16)) return TTP_SKIN_VISUAL_NEXT;
