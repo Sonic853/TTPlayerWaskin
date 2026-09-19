@@ -1,5 +1,7 @@
 # Winamp 皮肤 DLL 接入可行性分析
 
+> 后续实现已按用户要求改为 AddIn/ttp_waskin.dll，由 DLL 负责解析与绘制。当前行为见 [WSZ_IMPLEMENTATION.md](WSZ_IMPLEMENTATION.md)；本文保留最初的可行性分析。
+
 分析日期：2026-09-18。依据当前 `rebuild` 与同级 `winamp` 目录中的源代码。
 本文是静态代码审查和设计建议；尚未实现、编译或运行 Winamp 皮肤适配器。
 
@@ -37,19 +39,19 @@ PlayerWindow::LoadSkinPackage
 
 源码依据：
 
-- [skin_package.cpp](../src/skin/skin_package.cpp)：`IsLegacyCompatible()` 要求包中存在 `Skin.xml`。
-- [skin.cpp](../src/skin/skin.cpp)：`ParseLegacySkinMetadata()` 接受 TTPlayer 的版本 2 元数据；`LegacySkin::Load()` 读取 `/skin/player_window` 等 TTPlayer 节点。
-- [player_window.cpp](../src/ui/player_window.cpp)：`LoadSkin()` 直接创建 `LegacySkin`，没有按格式选择解析 DLL 的步骤。
+- [skin_package.cpp](../../rebuild/src/skin/skin_package.cpp)：`IsLegacyCompatible()` 要求包中存在 `Skin.xml`。
+- [skin.cpp](../../rebuild/src/skin/skin.cpp)：`ParseLegacySkinMetadata()` 接受 TTPlayer 的版本 2 元数据；`LegacySkin::Load()` 读取 `/skin/player_window` 等 TTPlayer 节点。
+- [player_window.cpp](../../rebuild/src/ui/player_window.cpp)：`LoadSkin()` 直接创建 `LegacySkin`，没有按格式选择解析 DLL 的步骤。
 - 同文件 `LoadSkinMenuCatalog()` 筛选 `.skn`、`.zip`，并调用 TTPlayer 元数据解析器。
-- [player_window_file_intake.cpp](../src/ui/player_window_file_intake.cpp)：皮肤拖入安装分支识别 `.skn`。
+- [player_window_file_intake.cpp](../../rebuild/src/ui/player_window_file_intake.cpp)：皮肤拖入安装分支识别 `.skn`。
 
 因此，经典 WSZ 一般在缺少 `Skin.xml` 时就被拒绝；现代 Winamp 包即使包含同名文件，也不符合 TTPlayer 的 XML 结构。接入需要同时调整加载、目录扫描、元数据、预览和拖入安装，不能只放宽扩展名。
 
 ### 2.2 图像能力可复用，布局还不是通用皮肤模型
 
-[skin_image.h](../include/ttplayer/skin/skin_image.h) 的 `SkinImage::Draw()` 已能指定源矩形，图像层也支持 BMP 和带透明度的图像，因此无需重新实现整套基础图像绘制。
+[skin_image.h](../../rebuild/include/ttplayer/skin/skin_image.h) 的 `SkinImage::Draw()` 已能指定源矩形，图像层也支持 BMP 和带透明度的图像，因此无需重新实现整套基础图像绘制。
 
-但 [skin.h](../include/ttplayer/skin/skin.h) 和 `player_window.cpp` 仍包含 TTPlayer 的布局约定：
+但 [skin.h](../../rebuild/include/ttplayer/skin/skin.h) 和 `player_window.cpp` 仍包含 TTPlayer 的布局约定：
 
 - `SkinElement` 以图片、帧数和控件名称描述按钮。
 - `DrawElementFrame()` 按图片宽度等分，读取横向连续帧；没有为各个状态分别保存任意图集矩形。
@@ -66,16 +68,16 @@ PlayerWindow::LoadSkinPackage
 
 | 位置 | 入口 | 用途 |
 | --- | --- | --- |
-| [plugin_manager.cpp](../src/plugins/plugin_manager.cpp) | `ttpGetSoundAddIn` | 原 TTPlayer AddIn |
-| [winamp_dsp.cpp](../src/audio/winamp_dsp.cpp) | `winampDSPGetHeader2` | Winamp DSP 音效 |
-| [mp3pro_source.cpp](../src/audio/mp3pro_source.cpp) | `winampGetInModule2` | mp3PRO 输入插件适配 |
+| [plugin_manager.cpp](../../rebuild/src/plugins/plugin_manager.cpp) | `ttpGetSoundAddIn` | 原 TTPlayer AddIn |
+| [winamp_dsp.cpp](../../rebuild/src/audio/winamp_dsp.cpp) | `winampDSPGetHeader2` | Winamp DSP 音效 |
+| [mp3pro_source.cpp](../../rebuild/src/audio/mp3pro_source.cpp) | `winampGetInModule2` | mp3PRO 输入插件适配 |
 
 本次在 `include`、`src` 中未发现 `winampGetGeneralPurposePlugin`、`WM_WA_IPC` 或 Wasabi `api_service` 的对应宿主实现。
 上述音频插件适配可提供 DLL 加载和生命周期管理的参考，但不能直接承担现代皮肤宿主职责。
 
 ### 2.4 WTL 不构成接入障碍
 
-[wtl_window.h](../include/ttplayer/ui/wtl_window.h) 的 `WindowBinding` 基于 `ATL::CWindowImpl`，将窗口消息交给现有处理函数。
+[wtl_window.h](../../rebuild/include/ttplayer/ui/wtl_window.h) 的 `WindowBinding` 基于 `ATL::CWindowImpl`，将窗口消息交给现有处理函数。
 皮肤绘制仍由重建版自己的代码完成，WTL 不负责解析 TTPlayer 或 Winamp 皮肤。
 
 可以继续使用现有 WTL 窗口，让皮肤 DLL 提供布局和资源。需要明确窗口消息和资源所有权，避免另一套引擎未经协调替换主窗口过程。
@@ -97,7 +99,7 @@ PlayerWindow::LoadSkinPackage
 
 这些图片包含指定坐标的多个状态，并不遵循 TTPlayer 的统一四状态横向帧条。例如 `draw_eject()` 从 `cbuttons.bmp` 的固定区域读取普通或按下图片；标题栏按钮又使用另一组坐标。
 
-`region.txt` 分别描述普通、WindowShade、均衡器和播放列表等窗口的多边形区域。WindowShade 是折叠为窄条的窗口模式，不能仅因重建版已有迷你模式，就认定两者布局和交互相同。
+`region.txt` 在当前 Winamp 源码中实际启用普通、WindowShade、Equalizer、EqualizerWS 四类多边形区域；播放列表相关读取及应用代码均被注释，不能视为生效功能。WindowShade 是折叠为窄条的窗口模式，不能仅因重建版已有迷你模式，就认定两者布局和交互相同。逐控件核对与当前 DLL 差异见 [WSZ_CONTROL_PARSING.md](WSZ_CONTROL_PARSING.md)。
 
 ### 为经典皮肤补齐的内容
 
@@ -191,7 +193,7 @@ flowchart TD
 经典位图皮肤可以使用适合旧系统的 GDI 路径，新增 DLL 本身不要求 WinRT 或现代图形运行时。
 但是否兼容取决于实际导入和依赖，不能由文件扩展名、编译宏或“使用 DLL”推断。
 
-当前 [CMakeLists.txt](../CMakeLists.txt) 的旧系统导入审计针对 `TTPlayerRebuild.exe`。
+当前 [CMakeLists.txt](../../rebuild/CMakeLists.txt) 的旧系统导入审计针对 `TTPlayerRebuild.exe`。
 增加皮肤模块后，需要将模块及其依赖纳入审计和分发，避免再次引入 `CreateFile2` 等旧系统缺失的静态导入。
 
 建议：
