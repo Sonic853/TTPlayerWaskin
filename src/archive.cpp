@@ -186,14 +186,16 @@ Archive::Archive(const wchar_t* path) {
         if(name=="skin.xml" || name.ends_with("/skin.xml"))
             throw std::runtime_error("Modern WAL skins are not supported in this version");
     }
-    if(!entries_.contains("main.bmp")) {
-        bool found=false;
-        for(const auto& [name,entry]:entries_) {
-            (void)entry;
-            if(name.ends_with("/main.bmp")) { if(found) Invalid(); prefix_=name.substr(0,name.size()-8); found=true; }
-        }
-        if(!found) Invalid();
+    // Winamp's classic loader addresses resources by basename. Flatten only
+    // supported resource types and reject ambiguous duplicates deterministically.
+    auto flattened=entries_; flattened.clear();
+    for(const auto& [resource,entry]:entries_) {
+        const auto slash=resource.find_last_of('/');
+        const auto name=slash==std::string::npos?resource:resource.substr(slash+1);
+        if(!name.ends_with(".bmp") && !name.ends_with(".txt") && !name.ends_with(".cur")) continue;
+        if(!flattened.emplace(name,entry).second) Invalid();
     }
+    entries_=std::move(flattened);
 }
 bool Archive::Has(const std::string& name) const { return entries_.contains(prefix_+name); }
 Bytes Archive::Read(const std::string& name) const {

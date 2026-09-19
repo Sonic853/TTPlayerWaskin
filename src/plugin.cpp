@@ -2,15 +2,14 @@
 #include <new>
 #include <memory>
 #include <string>
+#include <algorithm>
+#include <cstring>
 
 namespace {
 HRESULT WINAPI Probe(const wchar_t* path,TtpSkinInfo* info) {
     if(!path || !info || info->size<sizeof(*info)) return E_INVALIDARG;
     try {
-        waskin::Archive archive(path);
-        const auto bytes=archive.Read("main.bmp");
-        waskin::Image image(bytes);
-        if(image.width<275 || image.height<116) return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+        waskin::Skin validated(path,nullptr);
         std::wstring name=path;const auto slash=name.find_last_of(L"/\\");if(slash!=std::wstring::npos) name.erase(0,slash+1);
         const auto dot=name.find_last_of(L'.');if(dot!=std::wstring::npos) name.resize(dot);
         wcsncpy_s(info->name,name.c_str(),_TRUNCATE);info->author[0]=0;
@@ -35,7 +34,10 @@ void WINAPI Paint(void* instance,HWND window,HDC dc) {try {if(instance && dc) st
 BOOL WINAPI Translate(void* instance,const MSG* message) {try {return instance && message && static_cast<waskin::Skin*>(instance)->Translate(*message);} catch(...) {return FALSE;}}
 }
 extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* output) {
-    if(version!=TTP_SKIN_ABI || !output || output->size<sizeof(*output)) return E_INVALIDARG;
-    *output={sizeof(*output),TTP_SKIN_ABI,L"Winamp Classic Skin",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate};
+    if(version!=TTP_SKIN_ABI || !output || output->size<TTP_SKIN_PLUGIN_V1_SIZE) return E_INVALIDARG;
+    const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
+    const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
+        L"waskin",L".wsz;.wal"};
+    std::memcpy(output,&api,size);
     return S_OK;
 }

@@ -16,6 +16,13 @@ enum TtpSkinCommand {
     TTP_SKIN_VOLUME, TTP_SKIN_BALANCE, TTP_SKIN_SEEK, TTP_SKIN_MODE,
     TTP_SKIN_PLAY_ROW, TTP_SKIN_REMOVE_ROW, TTP_SKIN_EQ_ENABLE,
     TTP_SKIN_EQ_PRESETS, TTP_SKIN_TIME_MODE, TTP_SKIN_LYRICS,
+    TTP_SKIN_SELECT_ROW, TTP_SKIN_TOGGLE_ROW, TTP_SKIN_EXTEND_ROW,
+    TTP_SKIN_EXTEND_TOGGLE_ROW, TTP_SKIN_DELETE_SELECTED,
+    TTP_SKIN_LIST_TOOLBAR, // value: native TTPlayer toolbar index 0..6
+    TTP_SKIN_LIST_MENU, // value: row, or -1 for empty area
+    TTP_SKIN_SELECT_ALL, TTP_SKIN_PROPERTIES, TTP_SKIN_ALWAYS_ON_TOP,
+    TTP_SKIN_VISUAL_NEXT, TTP_SKIN_VISUAL_MENU, TTP_SKIN_EQ_BANDS,
+    TTP_SKIN_MOVE_SELECTION, TTP_SKIN_COPY_SELECTION, // insertion row; current native selection
     TTP_SKIN_EQ_VALUE = 100 // + 0: preamp, + 1..10: frequency bands; value -12..12
 };
 
@@ -53,6 +60,10 @@ typedef struct TtpSkinDrag {
     SIZE minimum; // Provider's resize minimum; ignored for window movement.
 } TtpSkinDrag;
 
+typedef struct TtpSkinVisualColors {
+    COLORREF background, top, middle, bottom, peak, scope;
+} TtpSkinVisualColors;
+
 typedef struct TtpSkinHost {
     uint32_t size, version;
     void* context;
@@ -65,6 +76,11 @@ typedef struct TtpSkinHost {
     // only: never enqueue, dispatch playback commands, or unload the provider.
     // The host owns capture, native snapping and atomic attached-window moves.
     BOOL (WINAPI *drag)(void*, const TtpSkinDrag*);
+    // Optional read-only selection flags: bit 0 selected, bit 1 caret.
+    uint32_t (WINAPI *selection)(void*, uint32_t);
+    // Render the native visualization into the supplied rectangle. The optional
+    // colors apply to this paint only, without modifying user preferences.
+    BOOL (WINAPI *visual)(void*, HDC, const RECT*, const TtpSkinVisualColors*);
 } TtpSkinHost;
 #define TTP_SKIN_HOST_V1_SIZE offsetof(TtpSkinHost, drag)
 
@@ -80,7 +96,7 @@ typedef struct TtpSkinInfo {
 
 typedef struct TtpSkinPlugin {
     uint32_t size, version;
-    const wchar_t* name;
+    const wchar_t* name; // Provider-defined label for Options tabs and Skin submenus.
     // Probe is reentrant; never creates UI or mutates an active skin.
     HRESULT (WINAPI *probe)(const wchar_t*, TtpSkinInfo*);
     // Create fully validates the package without touching windows.
@@ -94,6 +110,13 @@ typedef struct TtpSkinPlugin {
     void (WINAPI *shade)(void*);
     void (WINAPI *paint)(void*, HWND, HDC);
     BOOL (WINAPI *translate)(void*, const MSG*);
+    // Provider-owned package namespace, relative to the executable's Skin
+    // directory, and supported suffixes separated by semicolons. Required by
+    // the generic host; legacy v1 callers may request only the prefix below.
+    const wchar_t* skin_directory;
+    const wchar_t* extensions; // e.g. L".wsz;.wal"; no wildcard/native suffixes
+
 } TtpSkinPlugin;
+#define TTP_SKIN_PLUGIN_V1_SIZE offsetof(TtpSkinPlugin, skin_directory)
 
 typedef HRESULT (WINAPI *TtpGetSkinPlugin)(uint32_t, TtpSkinPlugin*);

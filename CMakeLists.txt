@@ -11,7 +11,7 @@ endif()
 # One XP-compatible binary serves both hosts. The C ABI never transfers CRT
 # allocations, so the modern host can safely use this DLL's older runtime.
 include("${CMAKE_CURRENT_SOURCE_DIR}/../rebuild/cmake/legacy_windows.cmake")
-add_library(ttp_waskin SHARED src/archive.cpp src/skin.cpp src/plugin.cpp src/ttp_waskin.def)
+add_library(ttp_waskin SHARED src/archive.cpp src/skin.cpp src/fallback.cpp src/plugin.cpp src/ttp_waskin.def)
 target_include_directories(ttp_waskin PUBLIC include PRIVATE src)
 target_compile_definitions(ttp_waskin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0501)
 target_compile_options(ttp_waskin PRIVATE /W4 /permissive- /EHsc /utf-8)
