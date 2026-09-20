@@ -10,10 +10,6 @@
 namespace waskin {
 namespace {
 constexpr UINT_PTR subclassId=0x77534b49, timerId=0x77534b49;
-constexpr int hitShade=500, hitDrag=501, hitResize=502, hitShuffle=503, hitRepeat=504,
-    hitSeek=505, hitVolume=506, hitBalance=507, hitRow=1000, hitScroll=508, hitScale=509, hitEqUp=510, hitEqFlat=511, hitEqDown=512,
-    hitAuto=513, hitListAdd=520, hitListRem=521, hitListSel=522, hitListMisc=523, hitListList=524,
-    hitScrollUp=525, hitScrollDown=526;
 std::string Trim(std::string s) {
     const auto first=s.find_first_not_of(" \t\r\n");
     if(first==std::string::npos) return {};
@@ -41,6 +37,13 @@ bool Inside(POINT p,int x,int y,int w,int h) { return p.x>=x && p.x<x+w && p.y>=
 std::wstring Time(int64_t milliseconds) {
     const auto seconds=std::max<int64_t>(0,milliseconds/1000);
     wchar_t text[48]{}; swprintf_s(text,L"%lld:%02lld",seconds/60,seconds%60); return text;
+}
+std::wstring DurationSummary(int64_t seconds,bool unknown) {
+    if(!seconds && unknown) return L"?";
+    wchar_t text[64]{};
+    if(seconds<3600) swprintf_s(text,L"%lld:%02lld",seconds/60,seconds%60);
+    else swprintf_s(text,L"%lld:%02lld:%02lld",seconds/3600,seconds/60%60,seconds%60);
+    return std::wstring(text)+(unknown?L"+":L"");
 }
 }
 
@@ -111,19 +114,22 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         std::memcpy(&host_,host,TTP_SKIN_HOST_V1_SIZE);
         if(host->size>=offsetof(TtpSkinHost,selection)) host_.drag=host->drag;
         if(host->size>=offsetof(TtpSkinHost,visual)) host_.selection=host->selection;
-        if(host->size>=sizeof(TtpSkinHost)) host_.visual=host->visual;
+        if(host->size>=offsetof(TtpSkinHost,tip)) host_.visual=host->visual;
+        if(host->size>=offsetof(TtpSkinHost,resize)) host_.tip=host->tip;
+        if(host->size>=offsetof(TtpSkinHost,spectrum)) host_.resize=host->resize;
+        if(host->size>=sizeof(TtpSkinHost)) host_.spectrum=host->spectrum;
     }
     Archive archive(path);
-    struct Spec {const char* name;int w,h,minw,minh;};
+    struct Spec {const char* name;int w,h;};
     const Spec specs[]={
-        {"main.bmp",275,116,275,116},{"cbuttons.bmp",136,36,136,18},
-        {"titlebar.bmp",344,87,302,14},{"shufrep.bmp",92,85,75,15},
-        {"posbar.bmp",307,10,248,10},{"volume.bmp",68,433,68,13},
-        {"balance.bmp",68,433,47,13},{"numbers.bmp",99,13,90,13},
-        {"nums_ex.bmp",108,13,108,13},{"text.bmp",155,74,150,12},
-        {"playpaus.bmp",42,9,36,9},{"monoster.bmp",58,24,58,12},
-        {"eqmain.bmp",275,315,275,116},{"eq_ex.bmp",275,82,275,14},
-        {"pledit.bmp",280,186,280,110}};
+        {"main.bmp",275,116},{"cbuttons.bmp",136,36},
+        {"titlebar.bmp",344,87},{"shufrep.bmp",92,85},
+        {"posbar.bmp",307,10},{"volume.bmp",68,433},
+        {"balance.bmp",68,433},{"numbers.bmp",99,13},
+        {"nums_ex.bmp",108,13},{"text.bmp",155,74},
+        {"playpaus.bmp",42,9},{"monoster.bmp",58,24},
+        {"eqmain.bmp",275,315},{"eq_ex.bmp",275,82},
+        {"pledit.bmp",280,186}};
     bool recognized=false;
     for(const auto& spec:specs) {
         if(archive.Has(spec.name)) {
@@ -131,9 +137,9 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
             const auto bytes=archive.Read(spec.name);
             try {
                 Image decoded(bytes);
-                if(decoded.width>=spec.minw && decoded.height>=spec.minh) {
-                    recognized=true;images_.emplace(spec.name,std::move(decoded));
-                }
+                // draw_LBitmap accepts any decodable bitmap. Skins deliberately
+                // omit atlas rows to leave the background artwork unobscured.
+                if(decoded.bitmap) {recognized=true;images_.emplace(spec.name,std::move(decoded));}
             } catch(const std::runtime_error&) {}
         }
         fallback_.emplace(spec.name,MakeFallback(spec.name,spec.w,spec.h));
@@ -160,12 +166,13 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
     std::istringstream colors(std::string{});
     const auto palette_bytes=archive.Read("viscolor.txt");
     colors.str(std::string(palette_bytes.begin(),palette_bytes.end()));
-    std::array<COLORREF,24> palette{};size_t at=0;std::string line;
+    auto& palette=visual_palette_;size_t at=0;std::string line;
     while(at<palette.size() && std::getline(colors,line)) {
         std::replace(line.begin(),line.end(),',',' ');std::istringstream values(line);int r,g,b;
-        if(values>>r>>g>>b && r>=0 && r<=255 && g>=0 && g<=255 && b>=0 && b<=255) palette[at++]=RGB(r,g,b);
+        if(!(values>>r>>g>>b) || r<0 || r>255 || g<0 || g>255 || b<0 || b>255) break;
+        palette[at++]=RGB(r,g,b);
     }
-    if(at==24) visual_colors_={palette[0],palette[2],palette[10],palette[17],palette[23],palette[20]};
+    visual_colors_={palette[0],palette[2],palette[10],palette[17],palette[23],palette[20]};
     for(const char* name:{"volbal","posbar","winbut","min","close","mainmenu","titlebar","songname","normal",
         "wsposbar","mmenu","wsnormal","pwinbut","pclose","ptbar","pvscroll","psize","pnormal","pwssize","pwsnorm",
         "eqslid","eqclose","eqtitle","eqnormal"}) {
@@ -178,6 +185,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
     if(const auto text=images_.find("text.bmp");text!=images_.end()) {
         HDC sample=CreateCompatibleDC(dc);const auto old=SelectObject(sample,text->second.bitmap);
         const auto bg=GetPixel(sample,150,4);int best=-1;
+        if(bg!=CLR_INVALID) text_background_=bg;
         for(int y=0;y<6;++y) for(int x=0;x<20;++x) {
             const auto c=GetPixel(sample,x,y);const int d=std::abs(int(GetRValue(c))-GetRValue(bg))+std::abs(int(GetGValue(c))-GetGValue(bg))+std::abs(int(GetBValue(c))-GetBValue(bg));
             if(d>best && c!=CLR_INVALID) {best=d;text_color_=c;}
@@ -196,19 +204,36 @@ TtpSkinState Skin::State() const {
 }
 void Skin::Command(uint32_t command,int32_t value) const { if(host_.command) host_.command(host_.context,command,value); }
 bool Skin::Blit(HDC dc,const char* name,int x,int y,int w,int h,int sx,int sy,int sw,int sh) const {
-    if(!sw) sw=w; if(!sh) sh=h;
-    if(sx<0 || sy<0 || sw<=0 || sh<=0 || w<=0 || h<=0) return false;
+    if(!sw) sw=w;if(!sh) sh=h;
+    if(sx<0 || sy<0 || w<=0 || h<=0 || sw<=0 || sh<=0) return false;
     const Image* chosen=nullptr;
-    const auto fits=[&](const Image& im) {return im.bitmap && sx+sw<=im.width && sy+sh<=im.height;};
-    if(const auto found=images_.find(name);found!=images_.end() && fits(found->second)) chosen=&found->second;
-    if(!chosen) if(const auto found=fallback_.find(name);found!=fallback_.end() && fits(found->second)) chosen=&found->second;
+    if(const auto found=images_.find(name);found!=images_.end()) chosen=&found->second;
+    if(!chosen) if(const auto found=fallback_.find(name);found!=fallback_.end()) chosen=&found->second;
     if(!chosen) return false;
     const auto& image=*chosen;
+    // Like Winamp's BitBlt, an existing short atlas clips to its source. Never
+    // substitute another image or text for a deliberately absent sprite.
+    const bool stretch=sw!=w || sh!=h;
+    if(sx>=image.width || sy>=image.height) return true;
+    if(!stretch) {w=std::min(w,image.width-sx);h=std::min(h,image.height-sy);}
     HDC source=CreateCompatibleDC(dc); if(!source) return false;
     const auto old=SelectObject(source,image.bitmap);
     SetStretchBltMode(dc,COLORONCOLOR);
-    const BOOL result=StretchBlt(dc,x,y,w,h,source,sx,sy,sw,sh,SRCCOPY);
+    const BOOL result=stretch?StretchBlt(dc,x,y,w,h,source,sx,sy,sw,sh,SRCCOPY):BitBlt(dc,x,y,w,h,source,sx,sy,SRCCOPY);
     SelectObject(source,old); DeleteDC(source); return result!=FALSE;
+}
+void Skin::TextBackground(HDC dc,RECT bounds,bool bitmap) const {
+    if(!bitmap) {Fill(dc,bounds,text_background_);return;}
+    const auto found=images_.find("text.bmp");
+    const auto& text=found==images_.end()?fallback_.at("text.bmp"):found->second;
+    if(text.width<=4) return;
+    HDC source=CreateCompatibleDC(dc);if(!source) return;
+    const auto old=SelectObject(source,text.bitmap);
+    // _draw_songname uses column 4 of the first glyph for trailing blanks;
+    // preserve its six individual pixels instead of guessing a flat colour.
+    for(int y=0;y<std::min(6,text.height) && bounds.top+y<bounds.bottom;++y)
+        Fill(dc,{bounds.left,bounds.top+y,bounds.right,bounds.top+y+1},GetPixel(source,4,y));
+    SelectObject(source,old);DeleteDC(source);
 }
 void Skin::Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap) const {
     const bool ascii=std::all_of(text.begin(),text.end(),[](wchar_t c){return c>=32 && c<127;});
@@ -243,7 +268,9 @@ void Skin::Title(HDC dc,RECT bounds,const std::wstring& title) const {
     const auto old=SelectObject(dc,font_);SIZE size{};GetTextExtentPoint32W(dc,title.data(),int(title.size()),&size);
     const int width=bitmap?int(title.size())*5:size.cx;
     const int offset=width>bounds.right-bounds.left?int(ticks_*2%unsigned(width+30)):0;
-    const int save=SaveDC(dc);IntersectClipRect(dc,bounds.left,bounds.top-(bitmap?0:3),bounds.right,bounds.bottom);
+    const RECT clip{bounds.left,bounds.top-(bitmap?0:3),bounds.right,bounds.top+(bitmap?6:9)};
+    const int save=SaveDC(dc);IntersectClipRect(dc,clip.left,clip.top,clip.right,clip.bottom);
+    TextBackground(dc,clip,bitmap);
     if(bitmap) {
         Text(dc,{bounds.left-offset,bounds.top,bounds.left-offset+width,bounds.bottom},title,text_color_,true);
         if(offset) Text(dc,{bounds.left-offset+width+30,bounds.top,bounds.left-offset+2*width+30,bounds.bottom},title,text_color_,true);
@@ -268,7 +295,7 @@ void Skin::DrawMain(View& view,HDC dc,const TtpSkinState& s) {
     Blit(dc,"titlebar.bmp",254,3,9,9,pressed==hitShade?9:0,view.shaded?27:18);
     Blit(dc,"titlebar.bmp",264,3,9,9,18,pressed==TTP_SKIN_CLOSE?9:0);
     if(view.shaded) {
-        Visual(dc,{79,5,117,10});
+        Visual(view,dc,{79,5,117,10});
         if(digits_visible) Text(dc,{126,4,158,10},(s.elapsed?L"":L"-")+Time(time),text_color_,true);
         const int pos=view.seek>=0?view.seek:int(s.duration_ms>0?std::clamp<int64_t>(s.position_ms,0,s.duration_ms)*10000/s.duration_ms:0);
         Blit(dc,"titlebar.bmp",226,4,17,7,0,36);
@@ -319,12 +346,14 @@ void Skin::DrawMain(View& view,HDC dc,const TtpSkinState& s) {
     const int icon=s.playback==2?0:s.playback==3?9:18;
     Blit(dc,"playpaus.bmp",26,28,9,9,icon,0);
     Blit(dc,"playpaus.bmp",24,28,3,9,s.playback==1?39:36,0);
-    Visual(dc,{24,43,100,59});
+    Visual(view,dc,{24,43,100,59});
     Blit(dc,"titlebar.bmp",10,22,8,43,304,0);
     Blit(dc,"monoster.bmp",212,41,28,12,29,s.channels==1?0:12);
     Blit(dc,"monoster.bmp",239,41,29,12,0,s.channels>=2?0:12);
-    if(ticks_<feedback_until_) Text(dc,{111,27,266,34},feedback_,text_color_,true);
-    else Title(dc,{111,27,266,34},s.title);
+    if(ticks_<feedback_until_) {
+        TextBackground(dc,{111,27,265,33},true);
+        Text(dc,{111,27,265,33},feedback_,text_color_,true);
+    } else Title(dc,{111,27,265,33},s.title);
     Text(dc,{111,43,131,49},s.bitrate>0?std::to_wstring(s.bitrate/1000):L"",current_,true);
     Text(dc,{156,43,171,49},s.sample_rate>0?std::to_wstring(s.sample_rate/1000):L"",current_,true);
 }
@@ -344,16 +373,23 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
         Text(dc,{width-85,0,width-35,14},(s.elapsed?L"":L"-")+Time(s.elapsed?s.position_ms:std::max<int64_t>(0,s.duration_ms-s.position_ms)),normal_);
     } else {
         Blit(dc,"pledit.bmp",0,0,25,20,0,state);
-        tile(25,0,(width-100)/2-25,20,127,state,25,20);
-        Blit(dc,"pledit.bmp",(width-100)/2,0,100,20,26,state);
-        tile((width+100)/2,0,width-25-(width+100)/2,20,127,state,25,20);
+        // draw_pe_tbar splits an odd tile into 12/13 pixels before the full
+        // tiles on each side. A partial trailing tile alone is stretched.
+        const int tiles=(width-150)/25,half=tiles/2;
+        int title_x=25;
+        if(tiles&1) {Blit(dc,"pledit.bmp",title_x,0,12,20,127,state);title_x+=12;}
+        tile(title_x,0,half*25,20,127,state,25,20);title_x+=half*25;
+        Blit(dc,"pledit.bmp",title_x,0,100,20,26,state);title_x+=100;
+        if(tiles&1) {Blit(dc,"pledit.bmp",title_x,0,13,20,127,state);title_x+=13;}
+        tile(title_x,0,half*25,20,127,state,25,20);title_x+=half*25;
+        tile(title_x,0,(width-150)%25,20,127,state,25,20);
         Blit(dc,"pledit.bmp",width-25,0,25,20,153,state);
         tile(0,20,12,height-58,0,42,12,29);
         tile(width-20,20,20,height-58,31,42,20,29);
         Blit(dc,"pledit.bmp",0,height-38,125,38,0,72);
         const int visual=width>=350?75:0;
         tile(125,height-38,width-275-visual,38,179,0,25,38);
-        if(visual) {Blit(dc,"pledit.bmp",width-225,height-38,75,38,205,0);Visual(dc,{width-219,height-28,width-149,height-12});}
+        if(visual) {Blit(dc,"pledit.bmp",width-225,height-38,75,38,205,0);Visual(view,dc,{width-223,height-26,width-151,height-10});}
         Blit(dc,"pledit.bmp",width-150,height-38,150,38,126,72);
         const int rows=std::max(1,(height-60)/row_height_);
         const int maximum=std::max(0,int(s.track_count)-rows);
@@ -381,13 +417,35 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
         // The y=111/130/149 cells belong to Winamp's expanded flyout menus;
         // painting them here replaces custom icons with menu-item labels.
         // This provider opens the host's native menus instead of that flyout.
-        Text(dc,{width-143,height-28,width-53,height-22},statistics_.empty()?std::to_wstring(s.track_count):statistics_,normal_,true);
-        if(s.playback==2 || (s.playback==3 && (ticks_/5)%2==0))
-            Text(dc,{width-86,height-15,width-53,height-9},(s.elapsed?L"":L"-")+Time(s.elapsed?s.position_ms:std::max<int64_t>(0,s.duration_ms-s.position_ms)),normal_,true);
+        auto summary=statistics_.empty()?(s.track_count?L"?/?":L"0:00/0:00"):statistics_;
+        summary.resize(18,L' '); // draw_pe_infostr overwrites all 18 cells.
+        Text(dc,{width-143,height-28,width-53,height-22},summary,normal_,true);
+        DrawPlaylistTime(dc,width,height,s);
     }
     Blit(dc,"pledit.bmp",width-11,3,9,9,pressed==TTP_SKIN_PLAYLIST?52:167,pressed==TTP_SKIN_PLAYLIST?42:3);
     if(pressed==hitShade) Blit(dc,"pledit.bmp",width-20,3,9,9,view.shaded?150:62,42);
     else Blit(dc,"pledit.bmp",width-20,3,9,9,view.shaded?128:158,view.shaded?45:3);
+}
+void Skin::DrawPlaylistTime(HDC dc,int width,int height,const TtpSkinState& s) const {
+    // draw_pe_timedisp uses fixed digit slots. The colon and the gaps belong
+    // to pledit.bmp; writing a normal time string overwrites that artwork.
+    const int x=width-86,y=height-15;
+    const bool clear=s.playback!=2 && (s.playback!=3 || (ticks_/5)%2!=0);
+    const int offsets[]={0,4,9,14,22,27};
+    if(clear) {
+        for(int offset:offsets) Blit(dc,"text.bmp",x+offset,y,offset?5:4,6,142,0);
+        return;
+    }
+    const auto seconds=std::max<int64_t>(0,(s.elapsed?s.position_ms:s.duration_ms-s.position_ms)/1000);
+    const auto minutes=seconds/60;
+    const bool hundreds=minutes>=100;
+    if(!hundreds) Blit(dc,"text.bmp",x,y,4,6,142,0);
+    Blit(dc,"text.bmp",x+(hundreds?0:4),y,3,6,s.elapsed?142:75,s.elapsed?0:6);
+    if(hundreds) Blit(dc,"text.bmp",x+4,y,5,6,int(minutes/100%10)*5,6);
+    Blit(dc,"text.bmp",x+9,y,5,6,int(minutes/10%10)*5,6);
+    Blit(dc,"text.bmp",x+14,y,5,6,int(minutes%10)*5,6);
+    Blit(dc,"text.bmp",x+22,y,5,6,int(seconds/10%6)*5,6);
+    Blit(dc,"text.bmp",x+27,y,5,6,int(seconds%10)*5,6);
 }
 void Skin::DrawEqualizer(View& view,HDC dc,const TtpSkinState& s) {
     const bool active=GetActiveWindow()==view.window;
@@ -407,8 +465,8 @@ void Skin::DrawEqualizer(View& view,HDC dc,const TtpSkinState& s) {
     if(pressed==hitShade) Blit(dc,"eq_ex.bmp",254,3,9,9,1,38);
     Blit(dc,"eqmain.bmp",14,18,25,12,10+(s.eq_enabled?59:0)+(pressed==TTP_SKIN_EQ_ENABLE?118:0),119);
     Blit(dc,"eqmain.bmp",39,18,33,12,35,119);
-    // There is no native per-track EQ autoload. Draw its off state visibly dimmed.
-    for(int y=18;y<30;++y) for(int x=39+(y%2);x<72;x+=2) SetPixelV(dc,x,y,RGB(48,48,48));
+    // No per-track autoload: use the skin's off-state artwork unchanged.
+    // Tooltip/cursor feedback describes the unavailable action.
     Blit(dc,"eqmain.bmp",217,18,44,12,224,pressed==TTP_SKIN_EQ_PRESETS?176:164);
     for(int i=0;i<11;++i) {
         const int x=i?78+(i-1)*18:21;
@@ -490,25 +548,38 @@ void Skin::HideChildren(View& view) {
     }
 }
 HRESULT Skin::Attach(const TtpSkinWindows& windows) {
-    Detach(); scale_=1;const HWND handles[]={windows.player,windows.playlist,windows.equalizer};
+    Detach();binding_=true;scale_=layout_.scale;
+    const HWND handles[]={windows.player,windows.playlist,windows.equalizer};
     RECT origin{}; GetWindowRect(windows.player,&origin);
+    if(layout_.bounds[0].right>layout_.bounds[0].left && layout_.bounds[0].bottom>layout_.bounds[0].top)
+        origin=layout_.bounds[0];
     for(int i=0;i<3;++i) {
-        if(!IsWindow(handles[i])) { if(i==0) {Detach();return E_INVALIDARG;} continue; }
-        auto& v=views_[i];v.shaded=false;v.seek=-1;v.scroll=0;v.selected=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
+        if(!IsWindow(handles[i])) { if(i==0) {Detach();binding_=false;return E_INVALIDARG;} continue; }
+        auto& v=views_[i];v.shaded=layout_.shaded[i];v.seek=-1;v.scroll=i==1?layout_.scroll:0;v.selected=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
         v.saved_region=CreateRectRgn(0,0,0,0);
         if(GetWindowRgn(v.window,v.saved_region)==ERROR) {DeleteObject(v.saved_region);v.saved_region=nullptr;}
-        if(!SetWindowSubclass(v.window,Subclass,subclassId,reinterpret_cast<DWORD_PTR>(&v))) {Detach();return E_FAIL;}
+        if(!SetWindowSubclass(v.window,Subclass,subclassId,reinterpret_cast<DWORD_PTR>(&v))) {Detach();binding_=false;return E_FAIL;}
         HideChildren(v);
-        const int height=i==1?232:116;
-        SetWindowPos(v.window,nullptr,origin.left,origin.top+(i==1?232:i==2?116:0),275,height,SWP_NOACTIVATE|SWP_NOZORDER);
-        v.expanded_height=height; Region(v);
+        v.expanded_height=layout_.expanded[i];
+        const auto& saved=layout_.bounds[i];
+        const bool have_saved=saved.right>saved.left && saved.bottom>saved.top;
+        const int factor=i==1?1:scale_;
+        SetWindowPos(v.window,nullptr,have_saved?saved.left:origin.left,
+            have_saved?saved.top:origin.top+(i==1?232:i==2?116:0)*scale_,
+            have_saved?saved.right-saved.left:275*factor,
+            v.shaded?14*factor:v.expanded_height,SWP_NOACTIVATE|SWP_NOZORDER);
+        Region(v);
         SetTimer(v.window,timerId,100,nullptr);
         InvalidateRect(v.window,nullptr,FALSE);
     }
-    return S_OK;
+    binding_=false;CaptureLayout();return S_OK;
 }
 void Skin::Detach() noexcept {
+    CaptureLayout();
     for(auto& v:views_) {
+        HideTip(v);
+        if(IsWindow(v.tooltip)) DestroyWindow(v.tooltip);
+        v.tooltip=nullptr;
         if(IsWindow(v.window)) {
             KillTimer(v.window,timerId);
             EndDrag(v);
@@ -524,11 +595,18 @@ void Skin::Detach() noexcept {
     }
 }
 void Skin::ToggleShade(View& v) {
-    RECT r{};GetClientRect(v.window,&r);
+    if(!IsWindow(v.window) || IsIconic(v.window)) return;
+    RECT r{};if(!GetClientRect(v.window,&r)) return;
     if(!v.shaded) v.expanded_height=r.bottom;
     v.shaded=!v.shaded;
-    SetWindowPos(v.window,nullptr,0,0,r.right,v.shaded?14*(v.kind==1?1:scale_):v.expanded_height,SWP_NOMOVE|SWP_NOACTIVATE|SWP_NOZORDER);
+    const SIZE size{r.right,v.shaded?14*(v.kind==1?1:scale_):v.expanded_height};
+    // The host includes native lyrics in the same geometry transaction. This
+    // must finish here, before repaint or persistence observes the new layout.
+    if(!(host_.resize && host_.resize(host_.context,v.window,size)) &&
+       !SetWindowPos(v.window,nullptr,0,0,size.cx,size.cy,SWP_NOMOVE|SWP_NOACTIVATE|SWP_NOZORDER))
+        v.shaded=!v.shaded;
     Region(v);InvalidateRect(v.window,nullptr,FALSE);
+    CaptureLayout();
 }
 void Skin::Shade() { if(views_[0].window) ToggleShade(views_[0]); }
 bool Skin::Translate(const MSG& message) {
@@ -544,10 +622,6 @@ bool Skin::Translate(const MSG& message) {
     return false;
 }
 void Skin::Feedback(const std::wstring& text) {feedback_=text;feedback_until_=ticks_+15;}
-void Skin::Visual(HDC dc,RECT bounds) const {
-    Fill(dc,bounds,visual_colors_.background);
-    if(host_.visual) host_.visual(host_.context,dc,&bounds,&visual_colors_);
-}
 void Skin::UpdateStatistics() {
     const auto count=State().track_count;
     if(!stats_index_ || stats_count_!=count) {
@@ -558,13 +632,13 @@ void Skin::UpdateStatistics() {
     for(unsigned work=0;work<128 && stats_index_<count;++work,++stats_index_) {
         TtpSkinTrack track{};track.size=sizeof(track);
         const bool known=host_.track && host_.track(host_.context,stats_index_,&track) && track.duration_ms>=0;
-        if(known) stats_total_+=track.duration_ms;else stats_unknown_=true;
+        if(known) stats_total_+=track.duration_ms/1000;else stats_unknown_=true;
         if(host_.selection && (host_.selection(host_.context,stats_index_)&1)) {
-            if(known) stats_selected_+=track.duration_ms;else stats_selected_unknown_=true;
+            if(known) stats_selected_+=track.duration_ms/1000;else stats_selected_unknown_=true;
         }
     }
     if(stats_index_==count) {
-        statistics_=Time(stats_selected_)+(stats_selected_unknown_?L"+":L"")+L"/"+Time(stats_total_)+(stats_unknown_?L"+":L"");stats_index_=0;
+        statistics_=DurationSummary(stats_selected_,stats_selected_unknown_)+L"/"+DurationSummary(stats_total_,stats_unknown_);stats_index_=0;
     }
 }
 void Skin::ToggleScale() {
@@ -579,31 +653,38 @@ void Skin::ToggleScale() {
         if(v.kind!=1) v.expanded_height=v.expanded_height*scale_/old;
         Region(v);InvalidateRect(v.window,nullptr,FALSE);
     }
+    CaptureLayout();
 }
-int Skin::Hit(const View& v,POINT p) const {
+int Skin::Hit(const View& v,POINT p,RECT* bounds) const {
     RECT r{};GetClientRect(v.window,&r);const int scale=v.kind==1?1:scale_;
     r.right/=scale;r.bottom/=scale;
     if(!Inside(p,0,0,r.right,r.bottom)) return 0;
+    const auto inside=[&](int x,int y,int w,int h) {
+        if(!Inside(p,x,y,w,h)) return false;
+        if(bounds) *bounds={x,y,x+w,y+h};
+        return true;
+    };
     // Precise controls precede the title drag surface, including windowshade.
-    if(Inside(p,r.right-11,3,9,9)) return v.kind==0?TTP_SKIN_CLOSE:v.kind==1?TTP_SKIN_PLAYLIST:TTP_SKIN_EQUALIZER;
-    if(Inside(p,r.right-(v.kind==1?20:21),3,9,9)) return hitShade;
+    if(inside(r.right-11,3,9,9)) return v.kind==0?TTP_SKIN_CLOSE:v.kind==1?TTP_SKIN_PLAYLIST:TTP_SKIN_EQUALIZER;
+    if(inside(r.right-(v.kind==1?20:21),3,9,9)) return hitShade;
     if(v.kind==0) {
-        if(Inside(p,244,3,9,9)) return TTP_SKIN_MINIMIZE;
-        if(Inside(p,6,3,9,9)) return TTP_SKIN_MENU;
+        if(inside(244,3,9,9)) return TTP_SKIN_MINIMIZE;
+        if(inside(6,3,9,9)) return TTP_SKIN_MENU;
     }
     static constexpr int buttons[]={TTP_SKIN_PREVIOUS,TTP_SKIN_PLAY,TTP_SKIN_PAUSE,TTP_SKIN_STOP,TTP_SKIN_NEXT,TTP_SKIN_OPEN};
     if(v.shaded) {
         if(v.kind==0) {
-            if(Inside(p,168,2,56,9)) return buttons[5-(p.x<215)-(p.x<204)-(p.x<195)-(p.x<186)-(p.x<176)];
-            if(Inside(p,226,3,17,9)) return hitSeek;
-            if(Inside(p,126,3,32,9)) return TTP_SKIN_TIME_MODE;
-            if(Inside(p,79,5,38,5)) return TTP_SKIN_VISUAL_NEXT;
+            constexpr int edges[]={168,176,186,195,204,215,224};
+            for(int i=0;i<6;++i) if(inside(edges[i],2,edges[i+1]-edges[i],9)) return buttons[i];
+            if(inside(226,3,17,9)) return hitSeek;
+            if(inside(126,3,32,9)) return TTP_SKIN_TIME_MODE;
+            if(inside(79,5,38,5)) return TTP_SKIN_VISUAL_NEXT;
         } else if(v.kind==2) {
-            if(Inside(p,61,3,102,9)) return hitVolume;
-            if(Inside(p,166,3,44,9)) return hitBalance;
+            if(inside(61,3,102,9)) return hitVolume;
+            if(inside(166,3,44,9)) return hitBalance;
         } else {
-            if(Inside(p,r.right-29,0,8,14)) return hitResize;
-            if(Inside(p,r.right-85,0,50,14)) return TTP_SKIN_TIME_MODE;
+            if(inside(r.right-29,0,8,14)) return hitResize;
+            if(inside(r.right-85,0,50,14)) return TTP_SKIN_TIME_MODE;
         }
         return hitDrag;
     }
@@ -618,28 +699,28 @@ int Skin::Hit(const View& v,POINT p) const {
             {11,24,8,8,TTP_SKIN_OPTIONS},{11,32,8,8,TTP_SKIN_ALWAYS_ON_TOP},
             {11,40,8,8,TTP_SKIN_PROPERTIES},{11,48,8,8,hitScale},{11,56,8,7,TTP_SKIN_VISUAL_MENU},
             {111,24,154,11,TTP_SKIN_PROPERTIES}};
-        if(Inside(p,16,88,114,18)) return buttons[(p.x-16)/23];
-        for(const auto& c:controls) if(Inside(p,c.x,c.y,c.w,c.h)) return c.hit;
+        for(int i=0;i<5;++i) if(inside(16+i*23,88,i==4?22:23,18)) return buttons[i];
+        for(const auto& c:controls) if(inside(c.x,c.y,c.w,c.h)) return c.hit;
     } else if(v.kind==1) {
-        if(Inside(p,r.right-18,r.bottom-18,18,18)) return hitResize;
-        if(Inside(p,r.right-15,r.bottom-36,8,5)) return hitScrollUp;
-        if(Inside(p,r.right-15,r.bottom-31,8,5)) return hitScrollDown;
-        if(Inside(p,r.right-15,20,8,r.bottom-58)) return hitScroll;
+        if(inside(r.right-18,r.bottom-18,18,18)) return hitResize;
+        if(inside(r.right-15,r.bottom-36,8,5)) return hitScrollUp;
+        if(inside(r.right-15,r.bottom-31,8,5)) return hitScrollDown;
+        if(inside(r.right-15,20,8,r.bottom-58)) return hitScroll;
         const int rows=std::max(1,(int(r.bottom)-60)/row_height_);
-        if(Inside(p,12,22,r.right-32,rows*row_height_)) return hitRow+v.scroll+(p.y-22)/row_height_;
+        if(inside(12,22,r.right-32,rows*row_height_)) return hitRow+v.scroll+(p.y-22)/row_height_;
         const int xs[]={14,43,72,101,int(r.right)-44};
-        for(int i=0;i<5;++i) if(Inside(p,xs[i],r.bottom-30,22,18)) return hitListAdd+i;
-        if(Inside(p,r.right-144,r.bottom-15,54,8)) return buttons[(p.x-(r.right-144))/9];
-        if(Inside(p,r.right-87,r.bottom-18,34,10)) return TTP_SKIN_TIME_MODE;
-        if(r.right>=350 && Inside(p,r.right-219,r.bottom-28,70,16)) return TTP_SKIN_VISUAL_NEXT;
+        for(int i=0;i<5;++i) if(inside(xs[i],r.bottom-30,22,18)) return hitListAdd+i;
+        for(int i=0;i<6;++i) if(inside(r.right-144+i*9,r.bottom-15,9,8)) return buttons[i];
+        if(inside(r.right-87,r.bottom-18,34,10)) return TTP_SKIN_TIME_MODE;
+        if(r.right>=350 && inside(r.right-223,r.bottom-26,72,16)) return TTP_SKIN_VISUAL_NEXT;
     } else {
-        if(Inside(p,14,18,25,12)) return TTP_SKIN_EQ_ENABLE;
-        if(Inside(p,39,18,33,12)) return hitAuto;
-        if(Inside(p,217,18,44,12)) return TTP_SKIN_EQ_PRESETS;
-        for(int i=0;i<11;++i) if(Inside(p,i?78+(i-1)*18:21,38,14,63)) return TTP_SKIN_EQ_VALUE+i;
-        if(Inside(p,42,33,25,10)) return hitEqUp;
-        if(Inside(p,42,65,25,10)) return hitEqFlat;
-        if(Inside(p,42,92,25,10)) return hitEqDown;
+        if(inside(14,18,25,12)) return TTP_SKIN_EQ_ENABLE;
+        if(inside(39,18,33,12)) return hitAuto;
+        if(inside(217,18,44,12)) return TTP_SKIN_EQ_PRESETS;
+        for(int i=0;i<11;++i) if(inside(i?78+(i-1)*18:21,38,14,63)) return TTP_SKIN_EQ_VALUE+i;
+        if(inside(42,33,25,10)) return hitEqUp;
+        if(inside(42,65,25,10)) return hitEqFlat;
+        if(inside(42,92,25,10)) return hitEqDown;
     }
     return hitDrag;
 }
@@ -732,7 +813,13 @@ HCURSOR Skin::Cursor(const View& v,POINT p) const {
 }
 LRESULT CALLBACK Skin::Subclass(HWND window,UINT message,WPARAM wp,LPARAM lp,UINT_PTR,DWORD_PTR data) {
     auto& v=*reinterpret_cast<View*>(data);
-    if(message==WM_NCDESTROY) { v.skin->EndDrag(v);RemoveWindowSubclass(window,Subclass,subclassId);v.window=nullptr;return DefSubclassProc(window,message,wp,lp); }
+    if(message==WM_NCDESTROY) {
+        v.skin->HideTip(v);
+        if(IsWindow(v.tooltip)) DestroyWindow(v.tooltip);
+        v.tooltip=nullptr;
+        v.skin->EndDrag(v);RemoveWindowSubclass(window,Subclass,subclassId);
+        v.window=nullptr;return DefSubclassProc(window,message,wp,lp);
+    }
     try { return v.skin->Message(v,message,wp,lp); }
     catch(...) { return DefSubclassProc(window,message,wp,lp); }
 }
@@ -755,24 +842,37 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     const int scale=v.kind==1?1:scale_;
     const POINT point{raw.x/scale,raw.y/scale};
     switch(message) {
+    case WM_NOTIFYFORMAT: return NFR_UNICODE;
+    case WM_WINDOWPOSCHANGED: CaptureLayout();break;
+    case WM_NOTIFY: {
+        const auto header=reinterpret_cast<NMHDR*>(lp);
+        if(header && header->hwndFrom==v.tooltip && header->code==TTN_GETDISPINFOW) {
+            v.tip_text=TipText(v,v.tip_hit,v.tip_bounds);
+            reinterpret_cast<NMTTDISPINFOW*>(lp)->lpszText=v.tip_text.data();return 0;
+        }
+        break;
+    }
     case WM_PAINT: { PAINTSTRUCT p{};HDC dc=BeginPaint(v.window,&p);Paint(v.window,dc);EndPaint(v.window,&p);return 0; }
     case WM_PRINTCLIENT: Paint(v.window,reinterpret_cast<HDC>(wp));return 0;
     case WM_ERASEBKGND: return 1;
     case WM_NCHITTEST: return HTCLIENT;
-    case WM_SIZE: if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);} return 0;
+    case WM_SIZE: HideTip(v);if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);} return 0;
     case WM_TIMER:
         if(wp==timerId) { if(v.kind==0) {++ticks_;UpdateStatistics();} HideChildren(v);InvalidateRect(v.window,nullptr,FALSE);return 0; } break;
-    case WM_ACTIVATE: InvalidateRect(v.window,nullptr,FALSE);break;
+    case WM_ACTIVATE: if(LOWORD(wp)==WA_INACTIVE) HideTip(v);InvalidateRect(v.window,nullptr,FALSE);break;
+    case WM_ENABLE: if(!wp) HideTip(v);break;
     case WM_SETCURSOR: {POINT cursor{};GetCursorPos(&cursor);ScreenToClient(v.window,&cursor);cursor.x/=scale;cursor.y/=scale;SetCursor(Cursor(v,cursor));return TRUE;}
     case WM_GETMINMAXINFO: {auto* info=reinterpret_cast<MINMAXINFO*>(lp);info->ptMinTrackSize={275*scale,(v.shaded?14:116)*scale};return 0;}
     case WM_CONTEXTMENU:
+        HideTip(v);
         if(lp==LPARAM(-1)) {
             if(v.kind==1) Command(TTP_SKIN_LIST_MENU,v.selected);
             else Command(v.kind==2?TTP_SKIN_EQ_PRESETS:TTP_SKIN_MENU);
         }
         return 0;
-    case WM_RBUTTONDOWN: return 0;
+    case WM_RBUTTONDOWN: HideTip(v);return 0;
     case WM_RBUTTONUP: {
+        HideTip(v);
         const int hit=Hit(v,point);
         if(v.kind==1) Command(TTP_SKIN_LIST_MENU,hit>=hitRow && uint32_t(hit-hitRow)<State().track_count?hit-hitRow:-1);
         else if(v.kind==2) Command(TTP_SKIN_EQ_PRESETS);
@@ -780,12 +880,14 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         return 0;
     }
     case WM_LBUTTONDBLCLK: {
+        HideTip(v);
         const int hit=Hit(v,point);
         if(v.kind==1 && hit>=hitRow && uint32_t(hit-hitRow)<State().track_count) Command(TTP_SKIN_PLAY_ROW,hit-hitRow);
         else if(hit==hitDrag && point.y<14) ToggleShade(v);
         return 0;
     }
     case WM_LBUTTONDOWN: {
+        HideTip(v);
         SetFocus(v.window);v.pressed=Hit(v,point);v.hot=true;
         if(v.pressed>=hitRow) {
             const int row=v.pressed-hitRow;
@@ -809,6 +911,7 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         InvalidateRect(v.window,nullptr,FALSE);return 0;
     }
     case WM_MOUSEMOVE:
+        UpdateTip(v,point);
         if(GetCapture()==v.window) {
             if(v.pressed>=hitRow) {
                 if(std::abs(raw.x-v.drag_start.x)>=GetSystemMetrics(SM_CXDRAG) || std::abs(raw.y-v.drag_start.y)>=GetSystemMetrics(SM_CYDRAG)) v.row_drag=true;
@@ -853,15 +956,20 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         if(!moving && !Sliding(hit) && hit==Hit(v,point)) Activate(v,hit,point);
         InvalidateRect(v.window,nullptr,FALSE);return 0;
     }
+    case WM_MOUSELEAVE: HideTip(v);return 0;
+    case WM_SHOWWINDOW: if(!wp) HideTip(v);break;
     case WM_CAPTURECHANGED: case WM_CANCELMODE:
+        HideTip(v);
         v.pressed=0;v.seek=-1;v.row_drag=false;v.selection_pending=false;v.drop=-1;EndDrag(v);
         if(message==WM_CANCELMODE && GetCapture()==v.window) ReleaseCapture();
         InvalidateRect(v.window,nullptr,FALSE);return 0;
     case WM_MOUSEWHEEL:
+        HideTip(v);
         if(v.kind==1) {v.wheel+=GET_WHEEL_DELTA_WPARAM(wp);v.scroll=std::max(0,v.scroll-(v.wheel/WHEEL_DELTA)*3);v.wheel%=WHEEL_DELTA;InvalidateRect(v.window,nullptr,FALSE);}
         else Command(TTP_SKIN_VOLUME,std::clamp(State().volume+GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*5,0,100));
         return 0;
     case WM_KEYDOWN:
+        HideTip(v);
         if(wp==VK_ESCAPE && GetCapture()==v.window) {
             const int hit=v.pressed;
             if(hit==hitVolume) Command(TTP_SKIN_VOLUME,v.initial);

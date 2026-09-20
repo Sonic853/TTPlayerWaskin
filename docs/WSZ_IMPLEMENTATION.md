@@ -11,6 +11,9 @@
 | [archive.cpp](../src/archive.cpp) | ZIP 目录解析、内存解压、CRC32、包大小/展开大小/条目数边界 |
 | [skin.cpp](../src/skin.cpp) | BMP 与 RLE 解码、经典图集、三个窗口绘制、区域、鼠标输入、预览和解绑 |
 | [plugin.cpp](../src/plugin.cpp) | ABI 入口、版本验证、错误返回及异常边界 |
+| [tooltips.cpp](../src/tooltips.cpp) | 实际命中区域的控件提示、宿主文字／快捷键回调与旧系统兼容 |
+| [layout.cpp](../src/layout.cpp) | 窗口布局快照、折叠／缩放状态解释、旧矩形恢复及状态校验 |
+| [spectrum.cpp](../src/spectrum.cpp)、[visual.cpp](../src/visual.cpp) | Winamp 默认经典频谱的独立点阵、逐行颜色、峰值动画及边界绘制；复用宿主分析快照 |
 | [ttp_skin_plugin.h](../include/ttp_skin_plugin.h) | 版本化 C ABI 和宿主状态/命令协议 |
 | [skin_plugin.cpp](../../rebuild/src/skin/skin_plugin.cpp) | EXE 的通用模块和实例生命周期 |
 | [player_window_skin_plugin.cpp](../../rebuild/src/ui/player_window_skin_plugin.cpp) | EXE 的播放器状态查询与命令桥接 |
@@ -47,3 +50,7 @@
 - XP / Win7 构建对 DLL 的静态导入执行独立审计；这不等于已在 XP、Win7 来宾系统完成界面运行验证。
 
 实际兼容边界见 [README.md](../README.md)；本轮不是 Modern / Bento 支持，也不是所有 WSZ 皮肤及 Winamp 行为的全面兼容认证。
+
+2026-09-20 补充：修复有效短图集的错误后备绘制、标题背景、列表标题栏取图顺序及底部固定数字槽／时长统计，详见 [Pink hearts 绘制修复](PINK_HEARTS_RENDERING.md)。
+
+同日补充：新增 DLL 内的默认经典频谱样式，修复效果切换时原生可视化子窗口短暂露出的尺寸错误，详见 [频谱与切换修复](CLASSIC_SPECTRUM.md)。

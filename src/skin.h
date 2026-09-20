@@ -7,8 +7,16 @@
 #include <utility>
 #include <vector>
 #include <commctrl.h>
+#include "spectrum.h"
 
 namespace waskin {
+enum SkinHit {
+    hitShade=500, hitDrag=501, hitResize=502, hitShuffle=503, hitRepeat=504,
+    hitSeek=505, hitVolume=506, hitBalance=507, hitScroll=508, hitScale=509,
+    hitEqUp=510, hitEqFlat=511, hitEqDown=512, hitAuto=513,
+    hitListAdd=520, hitListRem=521, hitListSel=522, hitListMisc=523, hitListList=524,
+    hitScrollUp=525, hitScrollDown=526, hitRow=1000
+};
 struct Image {
     HBITMAP bitmap{};
     int width{}, height{};
@@ -27,8 +35,13 @@ struct CursorHandle {
     ~CursorHandle() {if(value) DestroyCursor(value);}
 };
 struct View {
+    ClassicSpectrum spectrum;
     class Skin* skin{};
     HWND window{};
+    HWND tooltip{};
+    int tip_hit{};
+    RECT tip_bounds{};
+    std::wstring tip_text;
     int kind{};
     RECT saved{}, drag_rect{};
     HRGN saved_region{};
@@ -52,13 +65,24 @@ public:
     void Paint(HWND window,HDC dc);
     void Shade();
     bool Translate(const MSG& message);
+    HRESULT Layout(TtpSkinLayout& state,bool restore);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
+    struct SavedLayout {
+        std::array<RECT,3> bounds{};
+        std::array<bool,3> shaded{};
+        std::array<int,3> expanded{116,232,116};
+        int scale{1},scroll{};
+    } layout_;
+    bool binding_{};
+    void CaptureLayout() noexcept;
     std::unordered_map<std::string,Image> images_, fallback_;
     std::unordered_map<std::string,CursorHandle> cursors_;
     TtpSkinVisualColors visual_colors_{RGB(0,0,0),RGB(255,64,32),RGB(240,220,32),RGB(32,190,32),RGB(255,255,255),RGB(0,255,0)};
+    std::array<COLORREF,24> visual_palette_{ClassicVisualPalette()};
     int scale_{1}, row_height_{13};
     COLORREF text_color_{RGB(0,255,0)};
+    COLORREF text_background_{RGB(0,0,0)};
     unsigned feedback_until_{};
     std::wstring feedback_;
     uint32_t stats_index_{}, stats_count_{};
@@ -68,7 +92,7 @@ private:
     void UpdateStatistics();
     void Feedback(const std::wstring& text);
     void Title(HDC dc,RECT bounds,const std::wstring& text) const;
-    void Visual(HDC dc,RECT bounds) const;
+    void Visual(View& view,HDC dc,RECT bounds) const;
     void ToggleScale();
     void BeginTrack(View& view,int hit,POINT point);
     void SelectRow(View& view,int row);
@@ -83,17 +107,22 @@ private:
     TtpSkinState State() const;
     void Command(uint32_t command,int32_t value=0) const;
     bool Blit(HDC dc,const char* image,int x,int y,int w,int h,int sx=0,int sy=0,int sw=0,int sh=0) const;
+    void TextBackground(HDC dc,RECT bounds,bool bitmap) const;
     void Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap=false) const;
     void Draw(View& view,HDC dc,int width,int height);
     void DrawMain(View& view,HDC dc,const TtpSkinState& state);
     void DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinState& state);
+    void DrawPlaylistTime(HDC dc,int width,int height,const TtpSkinState& state) const;
     void DrawEqualizer(View& view,HDC dc,const TtpSkinState& state);
-    int Hit(const View& view,POINT point) const;
+    int Hit(const View& view,POINT point,RECT* bounds=nullptr) const;
     void Activate(View& view,int hit,POINT point);
     void Track(View& view,int hit,POINT point);
     void ToggleShade(View& view);
     void Region(View& view);
     void HideChildren(View& view);
+    void UpdateTip(View& view,POINT point);
+    void HideTip(View& view) noexcept;
+    std::wstring TipText(const View& view,int hit,const RECT& bounds) const;
     bool HostDrag(View& view, uint32_t phase, POINT point = {}) const;
     void EndDrag(View& view);
     LRESULT Message(View& view,UINT message,WPARAM wp,LPARAM lp);

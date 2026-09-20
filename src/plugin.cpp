@@ -32,12 +32,16 @@ HBITMAP WINAPI Preview(void* instance) {try {return instance?static_cast<waskin:
 void WINAPI Shade(void* instance) {try {if(instance) static_cast<waskin::Skin*>(instance)->Shade();} catch(...) {}}
 void WINAPI Paint(void* instance,HWND window,HDC dc) {try {if(instance && dc) static_cast<waskin::Skin*>(instance)->Paint(window,dc);} catch(...) {}}
 BOOL WINAPI Translate(void* instance,const MSG* message) {try {return instance && message && static_cast<waskin::Skin*>(instance)->Translate(*message);} catch(...) {return FALSE;}}
+HRESULT WINAPI Layout(void* instance,TtpSkinLayout* state,BOOL restore) {
+    if(!instance || !state || state->size<sizeof(*state)) return E_INVALIDARG;
+    try {return static_cast<waskin::Skin*>(instance)->Layout(*state,restore!=FALSE);} catch(...) {return E_FAIL;}
+}
 }
 extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* output) {
     if(version!=TTP_SKIN_ABI || !output || output->size<TTP_SKIN_PLUGIN_V1_SIZE) return E_INVALIDARG;
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
-        L"waskin",L".wsz;.wal"};
+        L"waskin",L".wsz;.wal",Layout};
     std::memcpy(output,&api,size);
     return S_OK;
 }

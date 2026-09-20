@@ -79,6 +79,8 @@ Image MakeFallback(const char* name,int width,int height) {
         // the skin does not supply that strip; never cover valid skin pixels.
         const int xs[]={14,43,72,101,232};
         const COLORREF ink=RGB(220,240,220);
+        // The fixed playlist time slots leave the colon in pledit.bmp.
+        fill(210,96,1,1,ink);fill(210,99,1,1,ink);
         for(int i=0;i<5;++i) {
             const int x=xs[i];button(x,80,22,18,L"");
             if(i<2) {fill(x+6,88,10,2,ink);if(i==0) fill(x+10,84,2,10,ink);}
