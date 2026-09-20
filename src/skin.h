@@ -51,7 +51,7 @@ struct View {
     POINT drag_start{};
     int pressed{}, scroll{}, selected{-1}, wheel{}, grab{}, seek{-1}, initial{};
     bool hot{true}, row_drag{}, selection_pending{};
-    int drop{-1};
+    int drop{-1}, external_drop{-1};
     bool shaded{}, dragging{}, resizing{}, host_drag{};
     int expanded_height{232};
 };
@@ -72,6 +72,7 @@ public:
     HMENU Menu(HWND window,uint32_t command);
     bool ContentState(TtpSkinContent& state,bool apply);
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
+    bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
     struct SavedLayout {

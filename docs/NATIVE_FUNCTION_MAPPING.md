@@ -46,6 +46,7 @@
 | 列表行右键 | 原生单项／多项菜单 | 由 DLL 提供命中行号，宿主按真正选中项调用 `PreparePlaylistMenu` 和原生菜单绘制 |
 | 列表多选／删除 | 原生选择集合与删除逻辑 | `SelectPlaylistRow`、`DeleteSelectedPlaylistRows`；不会因单击选择而开始播放 |
 | 列表内部拖动／Ctrl 复制 | 原生重排与导入提交路径 | 从 `FinishPlaylistTrackDrag` 提取共用的 `ReorderSelectedPlaylistRows`；维持播放条目身份与选中集合；媒体库查询列表继续禁止重排 |
+| 外部音频拖入列表 | 原生 OLE 文件导入与批量提交 | DLL 返回可见列表的插入行并绘制提示线；宿主在该行导入，保留文件顺序、曲目身份及原有信息读取流程 |
 | 频谱／示波器等 | 千千原生分析与效果功能 | 频谱由 DLL 使用 Winamp 默认经典样式、完整 24 色和峰值动画，复用宿主 FFT 快照；其余效果继续调用原生 `VisualRuntime`，详见 [频谱修复](CLASSIC_SPECTRUM.md) |
 | 可视化左键／右键 | 原生效果切换／菜单 | `SetVisualType`、`ShowVisualContextMenu`；包含千千已有的梦幻、频谱、波形、封面能力 |
 | 选项、置顶、歌曲属性 | 原生窗口和命令 | 不把 `genex.bmp` 绘制逻辑搬入选项对话框 |
@@ -60,6 +61,23 @@
 - Winamp `draw_pe.cpp::draw_pl` 从 `pledit.bmp` 的 `(0,72,125,38)` 和 `(126,72,150,38)` 绘制底部，常驻按钮图标已经包含在其中。`y=111/130/149` 区域属于 `draw_pe_addbut/rembut/selbut/miscbut/iobut` 的展开菜单；此前将 `y=149` 常态覆盖到底部，导致皮肤自带图标被菜单文字替换。
 - 删除该覆盖，保留完整底图和原生菜单功能；按钮命中顶部修正为 `height-30`。缺图后备按钮也改为直接画在底部图集中，使用项目自绘图标。
 - 本地像素回归在旧 DLL 上复现覆盖问题，新 DLL 通过完整图集、仅含底图的短图集、按钮按下与列表加宽验证。两版宿主通过普通／折叠模式的真实 DLL 消息链定位测试，原生进度回归通过。
+
+### 外部文件拖入位置修复（2026-09-21）
+
+此前 OLE 拖放仍通过隐藏的原生 `PlayLists`／`Files` 子控件命中。其坐标、16 像素行高和
+滚动位置与 DLL 的可见列表不同，还会把 Winamp 列表左侧误当成原生目录栏。
+
+新增可选 `playlist_drop` 接口，由 DLL 按播放列表客户区、实际字体行高及自己的滚动位置
+计算插入行。拖到曲目行时插入该行之前，列表内尾部空白追加；折叠时追加，参照
+Winamp `pledit.cpp` 的 `WM_DROPFILES` 分支。普通模式的边框、滚动条和底部按钮不作为曲目投放区。
+进入／移动使用该接口绘制插入线，松手重新查询最终位置；移出、取消或完成时清除提示。
+调整窗口大小或滚动后，即使尚未重绘也使用与下一帧一致的可见起始行。
+
+文件提取、目录／播放列表展开、批量插入及曲目信息读取仍复用宿主代码；
+Winamp 布局参数全部留在 DLL。新接口按完整尾部长度协商，旧接口前缀不变。
+本地 `rebuild/tests/waskin/drop_host_tests.inc` 通过实际 OLE `CF_HDROP` 回调验证左右位置、
+滚动与原生滚动不一致、移窗／缩放、多文件顺序、空列表、末尾空白、折叠追加、提示线像素和清除。
+测试仅存放在本地 tests 中，不上传，不由 Actions 执行。
 
 业务代码：[宿主桥接](../../rebuild/src/ui/player_window_skin_plugin.cpp)、[原生列表](../../rebuild/src/ui/player_window_playlist.cpp)、[原生 EQ](../../rebuild/src/ui/player_window_equalizer.cpp)、[原生可视化](../../rebuild/src/ui/player_window_visual.cpp)。原千千依据也见 [EQ 恢复说明](../../rebuild/docs/EQUALIZER_RECOVERY.md) 中的 `00429D20`、`00429EF4`、`00460AB1`；列表拖放保留原实现注释所对应的 `0048218C`／`004822AD` 规则。
 

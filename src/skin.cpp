@@ -412,8 +412,9 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
                 Text(dc,{width-22-size.cx,y,width-20,y+row_height_},duration,color);
             }
         }
-        if(view.row_drag && view.drop>=view.scroll && view.drop<=view.scroll+rows) {
-            const int y=std::min(height-39,22+(view.drop-view.scroll)*row_height_);
+        const int drop=view.external_drop>=0?view.external_drop:view.row_drag?view.drop:-1;
+        if(drop>=view.scroll && drop<=view.scroll+rows) {
+            const int y=std::min(height-39,22+(drop-view.scroll)*row_height_);
             Fill(dc,{12,y,width-20,y+1},current_);
         }
         Blit(dc,"pledit.bmp",width-15,20+(maximum?view.scroll*(height-76)/maximum:0),8,18,pressed==hitScroll?61:52,53);
@@ -575,7 +576,7 @@ HRESULT Skin::Attach(const TtpSkinWindows& windows) {
         origin=layout_.bounds[0];
     for(int i=0;i<4;++i) {
         if(!IsWindow(handles[i])) { if(i==0) {Detach();binding_=false;return E_INVALIDARG;} continue; }
-        auto& v=views_[i];v.shaded=layout_.shaded[i];v.seek=-1;v.scroll=i==1?layout_.scroll:0;v.selected=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
+        auto& v=views_[i];v.shaded=layout_.shaded[i];v.seek=-1;v.scroll=i==1?layout_.scroll:0;v.selected=-1;v.external_drop=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
         v.saved_region=CreateRectRgn(0,0,0,0);
         if(GetWindowRgn(v.window,v.saved_region)==ERROR) {DeleteObject(v.saved_region);v.saved_region=nullptr;}
         if(!SetWindowSubclass(v.window,Subclass,subclassId,reinterpret_cast<DWORD_PTR>(&v))) {Detach();binding_=false;return E_FAIL;}
@@ -597,6 +598,27 @@ HRESULT Skin::Attach(const TtpSkinWindows& windows) {
 bool Skin::Handles(HWND window) const {
     return window && std::any_of(views_.begin(),views_.end(),[window](const View& view){return view.window==window;});
 }
+bool Skin::PlaylistDrop(TtpSkinPlaylistDrop& drop) {
+    auto& view=views_[1];
+    if(drop.size<sizeof(drop) || !view.window || drop.window!=view.window || drop.phase>TTP_SKIN_DROP_LEAVE) return false;
+    drop.insertion=-1;
+    RECT client{};
+    if(drop.phase!=TTP_SKIN_DROP_LEAVE && GetClientRect(view.window,&client) && PtInRect(&client,drop.point)) {
+        const int count=int(State().track_count);
+        if(view.shaded) drop.insertion=count; // Winamp pledit.cpp: folded playlist appends.
+        else if(Inside(drop.point,12,22,client.right-32,client.bottom-60)) {
+            const int rows=std::max(1,(int(client.bottom)-60)/row_height_);
+            // Match DrawPlaylist even if a wheel/resize has queued a paint.
+            const int top=std::clamp(view.scroll,0,std::max(0,count-rows));
+            drop.insertion=std::min(count,top+(int(drop.point.y)-22)/row_height_);
+        }
+    }
+    if(drop.phase!=TTP_SKIN_DROP_QUERY && view.external_drop!=drop.insertion) {
+        view.external_drop=drop.insertion;
+        InvalidateRect(view.window,nullptr,FALSE);
+    }
+    return true;
+}
 void Skin::Detach() noexcept {
     CaptureLayout();
     for(auto& v:views_) {
@@ -614,7 +636,7 @@ void Skin::Detach() noexcept {
             InvalidateRect(v.window,nullptr,TRUE);
         }
         if(v.saved_region) DeleteObject(v.saved_region);
-        v.saved_region=nullptr;v.window=nullptr;v.children.clear();v.pressed=0;v.dragging=v.resizing=v.host_drag=false;
+        v.saved_region=nullptr;v.window=nullptr;v.children.clear();v.pressed=0;v.external_drop=-1;v.dragging=v.resizing=v.host_drag=false;
     }
 }
 void Skin::ToggleShade(View& v) {
