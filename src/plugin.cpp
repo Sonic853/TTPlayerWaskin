@@ -36,6 +36,7 @@ BOOL WINAPI Handles(void* instance,HWND window) {return instance && static_cast<
 HMENU WINAPI Menu(void* instance,HWND window,uint32_t command) {try {return instance?static_cast<waskin::Skin*>(instance)->Menu(window,command):nullptr;} catch(...) {return nullptr;}}
 BOOL WINAPI ContentState(void* instance,TtpSkinContent* state,BOOL apply) {try {return instance && state && static_cast<waskin::Skin*>(instance)->ContentState(*state,apply!=FALSE);} catch(...) {return FALSE;}}
 BOOL WINAPI LyricColors(void* instance,HWND window,TtpSkinLyricColors* colors) {return instance && colors && static_cast<waskin::Skin*>(instance)->LyricColors(window,*colors);}
+int32_t WINAPI LyricFontHeight(void* instance) {return instance?-11:0;}
 HRESULT WINAPI Layout(void* instance,TtpSkinLayout* state,BOOL restore) {
     if(!instance || !state || state->size<sizeof(*state)) return E_INVALIDARG;
     try {return static_cast<waskin::Skin*>(instance)->Layout(*state,restore!=FALSE);} catch(...) {return E_FAIL;}
@@ -45,7 +46,7 @@ extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* outpu
     if(version!=TTP_SKIN_ABI || !output || output->size<TTP_SKIN_PLUGIN_V1_SIZE) return E_INVALIDARG;
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
-        L"waskin",L".wsz;.wal",Layout,Handles,Menu,ContentState,LyricColors};
+        L"waskin",L".wsz;.wal",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight};
     std::memcpy(output,&api,size);
     return S_OK;
 }
