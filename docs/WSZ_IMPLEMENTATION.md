@@ -13,6 +13,7 @@
 | [plugin.cpp](../src/plugin.cpp) | ABI 入口、版本验证、错误返回及异常边界 |
 | [tooltips.cpp](../src/tooltips.cpp) | 实际命中区域的控件提示、宿主文字／快捷键回调与旧系统兼容 |
 | [layout.cpp](../src/layout.cpp) | 窗口布局快照、折叠／缩放状态解释、旧矩形恢复及状态校验 |
+| [video.cpp](../src/video.cpp) | 视频窗口外框、五按钮、内容模式与菜单；见 [视频内容窗口](VIDEO_CONTENT.md) |
 | [spectrum.cpp](../src/spectrum.cpp)、[visual.cpp](../src/visual.cpp) | Winamp 默认经典频谱的独立点阵、逐行颜色、峰值动画及边界绘制；复用宿主分析快照 |
 | [ttp_skin_plugin.h](../include/ttp_skin_plugin.h) | 版本化 C ABI 和宿主状态/命令协议 |
 | [skin_plugin.cpp](../../rebuild/src/skin/skin_plugin.cpp) | EXE 的通用模块和实例生命周期 |

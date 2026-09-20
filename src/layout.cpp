@@ -18,10 +18,12 @@ void Skin::CaptureLayout() noexcept {
 HRESULT Skin::Layout(TtpSkinLayout& state,bool restore) {
     if(!restore) {
         CaptureLayout();
-        for(size_t i=0;i<views_.size();++i) state.windows[i]=layout_.bounds[i];
-        swprintf_s(state.state,L"1 %d %d %d %d %d %d %d %d",layout_.scale,
+        for(size_t i=0;i<3;++i) state.windows[i]=layout_.bounds[i];
+        const auto& video=layout_.bounds[3];
+        swprintf_s(state.state,L"2 %d %d %d %d %d %d %d %d %ld %ld %ld %ld %d %d",layout_.scale,
             int(layout_.shaded[0]),int(layout_.shaded[1]),int(layout_.shaded[2]),
-            layout_.expanded[0],layout_.expanded[1],layout_.expanded[2],layout_.scroll);
+            layout_.expanded[0],layout_.expanded[1],layout_.expanded[2],layout_.scroll,
+            video.left,video.top,video.right,video.bottom,layout_.content_mode,layout_.visual_type);
         return S_OK;
     }
     if(IsWindow(views_[0].window)) return E_UNEXPECTED;
@@ -32,8 +34,21 @@ HRESULT Skin::Layout(TtpSkinLayout& state,bool restore) {
         std::wistringstream input(std::wstring(state.state,length));
         int version{},shade[3]{};
         if(!(input>>version>>next.scale>>shade[0]>>shade[1]>>shade[2]
-            >>next.expanded[0]>>next.expanded[1]>>next.expanded[2]>>next.scroll) || version!=1 ||
+            >>next.expanded[0]>>next.expanded[1]>>next.expanded[2]>>next.scroll) || (version!=1 && version!=2) ||
             (next.scale!=1 && next.scale!=2) || next.scroll<0) return E_INVALIDARG;
+        if(version==2) {
+            auto& video=next.bounds[3];
+            if(!(input>>video.left>>video.top>>video.right>>video.bottom>>next.content_mode>>next.visual_type) ||
+               next.content_mode<1 || next.content_mode>3 || next.visual_type<0 || next.visual_type>4)
+                return E_INVALIDARG;
+            if(!IsRectEmpty(&video)) {
+                const int64_t width=int64_t(video.right)-video.left,height=int64_t(video.bottom)-video.top;
+                if(width<275 || width>32767 || height<116 || height>32767 ||
+                   video.left < -1000000 || video.left>1000000 || video.top < -1000000 || video.top>1000000)
+                    return E_INVALIDARG;
+                next.expanded[3]=int(height);
+            } else video={};
+        }
         input>>std::ws;if(!input.eof()) return E_INVALIDARG;
         for(size_t i=0;i<3;++i) {
             if(shade[i]!=0 && shade[i]!=1) return E_INVALIDARG;

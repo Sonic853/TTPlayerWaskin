@@ -117,7 +117,9 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         if(host->size>=offsetof(TtpSkinHost,tip)) host_.visual=host->visual;
         if(host->size>=offsetof(TtpSkinHost,resize)) host_.tip=host->tip;
         if(host->size>=offsetof(TtpSkinHost,spectrum)) host_.resize=host->resize;
-        if(host->size>=sizeof(TtpSkinHost)) host_.spectrum=host->spectrum;
+        if(host->size>=offsetof(TtpSkinHost,content)) host_.spectrum=host->spectrum;
+        if(host->size>=offsetof(TtpSkinHost,content_input)) host_.content=host->content;
+        if(host->size>=sizeof(TtpSkinHost)) host_.content_input=host->content_input;
     }
     Archive archive(path);
     struct Spec {const char* name;int w,h;};
@@ -129,7 +131,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         {"nums_ex.bmp",108,13},{"text.bmp",155,74},
         {"playpaus.bmp",42,9},{"monoster.bmp",58,24},
         {"eqmain.bmp",275,315},{"eq_ex.bmp",275,82},
-        {"pledit.bmp",280,186}};
+        {"pledit.bmp",280,186},{"video.bmp",234,119}};
     bool recognized=false;
     for(const auto& spec:specs) {
         if(archive.Has(spec.name)) {
@@ -151,6 +153,8 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
     current_=Color(ini_["playlist/text/current"],current_);
     background_=Color(ini_["playlist/text/normalbg"],background_);
     selection_=Color(ini_["playlist/text/selectedbg"],selection_);
+    video_text_=Color(ini_["playlist/text/mbfg"],video_text_);
+    video_background_=Color(ini_["playlist/text/mbbg"],video_background_);
     const auto font_name=ini_["playlist/text/font"];
     std::wstring face=L"Arial";
     if(!font_name.empty()) {
@@ -175,7 +179,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
     visual_colors_={palette[0],palette[2],palette[10],palette[17],palette[23],palette[20]};
     for(const char* name:{"volbal","posbar","winbut","min","close","mainmenu","titlebar","songname","normal",
         "wsposbar","mmenu","wsnormal","pwinbut","pclose","ptbar","pvscroll","psize","pnormal","pwssize","pwsnorm",
-        "eqslid","eqclose","eqtitle","eqnormal"}) {
+        "eqslid","eqclose","eqtitle","eqnormal","vnormal","vclose","vsize","vtbar","vmbuts"}) {
         if(auto cursor=ReadCursor(archive.Read(std::string(name)+".cur"))) cursors_.emplace(name,CursorHandle(cursor));
     }
     font_=CreateFontW(-11,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
@@ -193,7 +197,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         SelectObject(sample,old);DeleteDC(sample);
     }
     SelectObject(dc,previous);DeleteDC(dc);
-    for(int i=0;i<3;++i) { views_[i].skin=this; views_[i].kind=i; }
+    for(int i=0;i<4;++i) { views_[i].skin=this; views_[i].kind=i; }
 }
 Skin::~Skin() { Detach(); if(font_) DeleteObject(font_); }
 TtpSkinState Skin::State() const {
@@ -496,7 +500,8 @@ void Skin::Draw(View& view,HDC dc,int width,int height) {
     const auto state=State();
     if(view.kind==0) DrawMain(view,dc,state);
     else if(view.kind==1) DrawPlaylist(view,dc,width,height,state);
-    else DrawEqualizer(view,dc,state);
+    else if(view.kind==2) DrawEqualizer(view,dc,state);
+    else DrawVideo(view,dc,width,height);
     RestoreDC(dc,saved);
 }
 void Skin::Paint(HWND window,HDC dc) {
@@ -506,11 +511,24 @@ void Skin::Paint(HWND window,HDC dc) {
         HDC memory=CreateCompatibleDC(dc); HBITMAP bitmap=CreateCompatibleBitmap(dc,std::max(1L,rect.right),std::max(1L,rect.bottom));
         if(!memory || !bitmap) { if(memory) DeleteDC(memory); if(bitmap) DeleteObject(bitmap); return; }
         const auto old=SelectObject(memory,bitmap);
-        const int scale=view.kind==1?1:scale_;
+        const int scale=(view.kind==1 || view.kind==3)?1:scale_;
         if(scale!=1) {SetMapMode(memory,MM_ANISOTROPIC);SetWindowExtEx(memory,1,1,nullptr);SetViewportExtEx(memory,scale,scale,nullptr);}
         Draw(view,memory,rect.right/scale,rect.bottom/scale);
         SetMapMode(memory,MM_TEXT);
+        // The supplied DC can come from GetDC/WM_PRINTCLIENT as well as
+        // BeginPaint. Explicitly exclude live host widgets in every path;
+        // the lyric parent does not necessarily have WS_CLIPCHILDREN.
+        const int saved=SaveDC(dc);
+        if(!saved) {SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);return;}
+        if(view.kind==3) for(HWND child=GetWindow(window,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+            if(GetPropW(child,TTP_SKIN_CONTENT_CHILD) && (GetWindowLongPtrW(child,GWL_STYLE)&WS_VISIBLE)) {
+                RECT bounds{};GetWindowRect(child,&bounds);
+                MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&bounds),2);
+                ExcludeClipRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom);
+            }
+        }
         BitBlt(dc,0,0,rect.right,rect.bottom,memory,0,0,SRCCOPY);
+        RestoreDC(dc,saved);
         SelectObject(memory,old); DeleteObject(bitmap); DeleteDC(memory); return;
     }
 }
@@ -522,13 +540,13 @@ HBITMAP Skin::Preview() {
     SelectObject(dc,old); DeleteDC(dc); return result;
 }
 void Skin::Region(View& view) {
-    const char* names[]={"normal","playlist","equalizer"};
+    const char* names[]={"normal","playlist","equalizer","video"};
     std::string name=names[view.kind];
     if(view.shaded) name=view.kind==0?"windowshade":name+"ws";
     const auto key="region/"+name+"/";
     const auto counts=ini_.find(key+"numpoints"), points=ini_.find(key+"pointlist");
     HRGN region=nullptr;
-    if(view.kind!=1 && counts!=ini_.end() && points!=ini_.end()) {
+    if(view.kind!=1 && view.kind!=3 && counts!=ini_.end() && points!=ini_.end()) {
         auto c=counts->second,p=points->second; std::replace(c.begin(),c.end(),',',' '); std::replace(p.begin(),p.end(),',',' ');
         std::istringstream cs(c),ps(p); std::vector<int> sizes; std::vector<POINT> coords; int n,total=0;
         while(cs>>n) { if(n<3 || n>8192-total) {sizes.clear();break;} sizes.push_back(n);total+=n; }
@@ -542,6 +560,7 @@ void Skin::Region(View& view) {
 }
 void Skin::HideChildren(View& view) {
     for(HWND child=GetWindow(view.window,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+        if(view.kind==3 && GetPropW(child,TTP_SKIN_CONTENT_CHILD)) continue;
         if(std::none_of(view.children.begin(),view.children.end(),[child](const auto& p){return p.first==child;}))
             view.children.emplace_back(child,(GetWindowLongPtrW(child,GWL_STYLE)&WS_VISIBLE)!=0);
         if(GetWindowLongPtrW(child,GWL_STYLE)&WS_VISIBLE) ShowWindow(child,SW_HIDE);
@@ -549,11 +568,12 @@ void Skin::HideChildren(View& view) {
 }
 HRESULT Skin::Attach(const TtpSkinWindows& windows) {
     Detach();binding_=true;scale_=layout_.scale;
-    const HWND handles[]={windows.player,windows.playlist,windows.equalizer};
+    const HWND handles[]={windows.player,windows.playlist,windows.equalizer,
+        windows.size>=sizeof(windows) && host_.content?windows.lyrics:nullptr};
     RECT origin{}; GetWindowRect(windows.player,&origin);
     if(layout_.bounds[0].right>layout_.bounds[0].left && layout_.bounds[0].bottom>layout_.bounds[0].top)
         origin=layout_.bounds[0];
-    for(int i=0;i<3;++i) {
+    for(int i=0;i<4;++i) {
         if(!IsWindow(handles[i])) { if(i==0) {Detach();binding_=false;return E_INVALIDARG;} continue; }
         auto& v=views_[i];v.shaded=layout_.shaded[i];v.seek=-1;v.scroll=i==1?layout_.scroll:0;v.selected=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
         v.saved_region=CreateRectRgn(0,0,0,0);
@@ -563,16 +583,19 @@ HRESULT Skin::Attach(const TtpSkinWindows& windows) {
         v.expanded_height=layout_.expanded[i];
         const auto& saved=layout_.bounds[i];
         const bool have_saved=saved.right>saved.left && saved.bottom>saved.top;
-        const int factor=i==1?1:scale_;
-        SetWindowPos(v.window,nullptr,have_saved?saved.left:origin.left,
-            have_saved?saved.top:origin.top+(i==1?232:i==2?116:0)*scale_,
+        const int factor=(i==1 || i==3)?1:scale_;
+        SetWindowPos(v.window,nullptr,have_saved?saved.left:i==3?v.saved.left:origin.left,
+            have_saved?saved.top:i==3?v.saved.top:origin.top+(i==1?232:i==2?116:0)*scale_,
             have_saved?saved.right-saved.left:275*factor,
             v.shaded?14*factor:v.expanded_height,SWP_NOACTIVATE|SWP_NOZORDER);
         Region(v);
-        SetTimer(v.window,timerId,100,nullptr);
+        SetTimer(v.window,timerId,i==3?33:100,nullptr);
         InvalidateRect(v.window,nullptr,FALSE);
     }
     binding_=false;CaptureLayout();return S_OK;
+}
+bool Skin::Handles(HWND window) const {
+    return window && std::any_of(views_.begin(),views_.end(),[window](const View& view){return view.window==window;});
 }
 void Skin::Detach() noexcept {
     CaptureLayout();
@@ -595,7 +618,7 @@ void Skin::Detach() noexcept {
     }
 }
 void Skin::ToggleShade(View& v) {
-    if(!IsWindow(v.window) || IsIconic(v.window)) return;
+    if(v.kind==3 || !IsWindow(v.window) || IsIconic(v.window)) return;
     RECT r{};if(!GetClientRect(v.window,&r)) return;
     if(!v.shaded) v.expanded_height=r.bottom;
     v.shaded=!v.shaded;
@@ -646,17 +669,17 @@ void Skin::ToggleScale() {
     RECT origin{};GetWindowRect(views_[0].window,&origin);
     for(auto& v:views_) if(v.window) {
         EndDrag(v);RECT r{};GetWindowRect(v.window,&r);
-        const int factor=v.kind==1?old:scale_;
+        const int factor=(v.kind==1 || v.kind==3)?old:scale_;
         SetWindowPos(v.window,nullptr,origin.left+(r.left-origin.left)*scale_/old,
             origin.top+(r.top-origin.top)*scale_/old,(r.right-r.left)*factor/old,
             (r.bottom-r.top)*factor/old,SWP_NOZORDER|SWP_NOACTIVATE);
-        if(v.kind!=1) v.expanded_height=v.expanded_height*scale_/old;
+        if(v.kind!=1 && v.kind!=3) v.expanded_height=v.expanded_height*scale_/old;
         Region(v);InvalidateRect(v.window,nullptr,FALSE);
     }
     CaptureLayout();
 }
 int Skin::Hit(const View& v,POINT p,RECT* bounds) const {
-    RECT r{};GetClientRect(v.window,&r);const int scale=v.kind==1?1:scale_;
+    RECT r{};GetClientRect(v.window,&r);const int scale=(v.kind==1 || v.kind==3)?1:scale_;
     r.right/=scale;r.bottom/=scale;
     if(!Inside(p,0,0,r.right,r.bottom)) return 0;
     const auto inside=[&](int x,int y,int w,int h) {
@@ -664,6 +687,16 @@ int Skin::Hit(const View& v,POINT p,RECT* bounds) const {
         if(bounds) *bounds={x,y,x+w,y+h};
         return true;
     };
+    if(v.kind==3) {
+        if(inside(r.right-11,3,9,9)) return TTP_SKIN_LYRICS;
+        if(inside(r.right-20,r.bottom-20,20,20)) return hitResize;
+        for(int i=0;i<5;++i)
+            if(inside(9+i*15,r.bottom-29,15,18)) return hitVideoFullscreen+i;
+        if(inside(0,0,r.right,20)) return hitDrag;
+        // Content clicks do not cycle modes or fall through to the native
+        // lyric/visual controls. Only explicit buttons and menus switch it.
+        return 0;
+    }
     // Precise controls precede the title drag surface, including windowshade.
     if(inside(r.right-11,3,9,9)) return v.kind==0?TTP_SKIN_CLOSE:v.kind==1?TTP_SKIN_PLAYLIST:TTP_SKIN_EQUALIZER;
     if(inside(r.right-(v.kind==1?20:21),3,9,9)) return hitShade;
@@ -772,7 +805,8 @@ void Skin::SelectRow(View& v,int row) {
     InvalidateRect(v.window,nullptr,FALSE);
 }
 void Skin::Activate(View& v,int hit,POINT p) {
-    if(hit==hitShade) ToggleShade(v);
+    if(hit>=hitVideoFullscreen && hit<=hitVideoMenu) VideoAction(v,hit);
+    else if(hit==hitShade) ToggleShade(v);
     else if(hit==hitScale) ToggleScale();
     else if(hit==hitAuto) Feedback(L"Auto EQ: unavailable");
     else if(hit==hitEqUp || hit==hitEqFlat || hit==hitEqDown) Command(TTP_SKIN_EQ_BANDS,hit==hitEqUp?12:hit==hitEqDown?-12:0);
@@ -802,6 +836,9 @@ HCURSOR Skin::Cursor(const View& v,POINT p) const {
         else if(hit==TTP_SKIN_PLAYLIST) name="pclose";
         else if(hit==hitShade) name="pwinbut";
         else if(hit==hitDrag) name="ptbar";
+    } else if(v.kind==3) {
+        name=hit==TTP_SKIN_LYRICS?"vclose":hit==hitDrag?"vtbar":hit==hitResize?"vsize":
+            hit>=hitVideoFullscreen && hit<=hitVideoMenu?"vmbuts":"vnormal";
     } else {
         name="eqnormal";
         if(Sliding(hit)) name="eqslid";
@@ -838,8 +875,19 @@ void Skin::EndDrag(View& v) {
     if(delegated) HostDrag(v,TTP_SKIN_DRAG_END);
 }
 LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
+    if(v.kind==3 && host_.content_input &&
+       (message==WM_SIZE || (!v.pressed && !v.dragging && !v.resizing))) {
+        TtpSkinContent content{sizeof(content),v.window};
+        if(ContentState(content,false)) {
+            const MSG event{v.window,message,wp,lp};
+            LRESULT result{};
+            if(host_.content_input(host_.context,&content,&event,&result)) {
+                HideTip(v);return result;
+            }
+        }
+    }
     const POINT raw{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
-    const int scale=v.kind==1?1:scale_;
+    const int scale=(v.kind==1 || v.kind==3)?1:scale_;
     const POINT point{raw.x/scale,raw.y/scale};
     switch(message) {
     case WM_NOTIFYFORMAT: return NFR_UNICODE;
@@ -865,6 +913,9 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     case WM_GETMINMAXINFO: {auto* info=reinterpret_cast<MINMAXINFO*>(lp);info->ptMinTrackSize={275*scale,(v.shaded?14:116)*scale};return 0;}
     case WM_CONTEXTMENU:
         HideTip(v);
+        if(v.kind==3) {
+            Command(TTP_SKIN_CONTENT_MENU,lp==LPARAM(-1)?1:0);return 0;
+        }
         if(lp==LPARAM(-1)) {
             if(v.kind==1) Command(TTP_SKIN_LIST_MENU,v.selected);
             else Command(v.kind==2?TTP_SKIN_EQ_PRESETS:TTP_SKIN_MENU);
@@ -874,7 +925,8 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     case WM_RBUTTONUP: {
         HideTip(v);
         const int hit=Hit(v,point);
-        if(v.kind==1) Command(TTP_SKIN_LIST_MENU,hit>=hitRow && uint32_t(hit-hitRow)<State().track_count?hit-hitRow:-1);
+        if(v.kind==3) Command(TTP_SKIN_CONTENT_MENU);
+        else if(v.kind==1) Command(TTP_SKIN_LIST_MENU,hit>=hitRow && uint32_t(hit-hitRow)<State().track_count?hit-hitRow:-1);
         else if(v.kind==2) Command(TTP_SKIN_EQ_PRESETS);
         else Command(hit==TTP_SKIN_VISUAL_NEXT?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);
         return 0;

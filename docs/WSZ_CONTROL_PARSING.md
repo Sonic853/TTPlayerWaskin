@@ -112,7 +112,7 @@ DLL 的可选图片缺失时通常跳过绘制或用简单文字／色块补位�
 | `genex.bmp` | 130×75 | 通用按钮、滚动条及控件配色像素 |
 | `video.bmp` | 234×119 | 视频窗口边框及底部五按钮 |
 
-配置资源为 `pledit.txt`、`region.txt`、`viscolor.txt`、`colors.ini`，以及第 10 节列出的 `.cur`。当前 DLL 加载 15 个命名 BMP，尚未加载 `eqmain_iso.bmp`、`gen.bmp`、`genex.bmp`、`video.bmp`。
+配置资源为 `pledit.txt`、`region.txt`、`viscolor.txt`、`colors.ini`，以及第 10 节列出的 `.cur`。当前 DLL 加载 16 个命名 BMP（包括新增的 `video.bmp`），尚未加载 `eqmain_iso.bmp`、`gen.bmp`、`genex.bmp`。
 
 `mb.bmp` 虽然也存在于资源目录，但当前 `draw_mb.cpp` 只剩 include，`Skins.cpp` 的 `mb.ini` 行为位于 `#if 0` 中。不能仅凭遗留文件，认定此版本仍完整实现旧 MiniBrowser 控件。
 
@@ -403,7 +403,7 @@ DLL 的可选图片缺失时通常跳过绘制或用简单文字／色块补位�
 
 对应命令为全屏、100%、200%、TV 按钮命令和视频菜单；关闭位于右上角。信息栏使用 `pledit.txt` 的 `mbFG`／`mbBG`。
 
-当前 DLL 的 `TtpSkinWindows` 只有主窗口、播放列表、均衡器，未提供视频或通用插件窗口句柄，以上三类扩展资源尚无实际承载路径。按用户此前要求，歌词等未接管窗口继续由所选 TTPlayer 原生皮肤显示。
+当前通过可选歌词窗口句柄接管 `video.bmp`，用它承载歌词、全屏样式视觉效果或两者同屏，详见 [视频内容窗口](VIDEO_CONTENT.md)。无内容接口时继续使用原生歌词窗口。`gen.bmp`／`genex.bmp` 的通用插件窗口仍未接入。
 
 ## 10. 自定义鼠标光标
 

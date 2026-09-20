@@ -15,7 +15,9 @@ enum SkinHit {
     hitSeek=505, hitVolume=506, hitBalance=507, hitScroll=508, hitScale=509,
     hitEqUp=510, hitEqFlat=511, hitEqDown=512, hitAuto=513,
     hitListAdd=520, hitListRem=521, hitListSel=522, hitListMisc=523, hitListList=524,
-    hitScrollUp=525, hitScrollDown=526, hitRow=1000
+    hitScrollUp=525, hitScrollDown=526,
+    hitVideoFullscreen=530, hitVideoNormal=531, hitVideoDouble=532,
+    hitVideoMode=533, hitVideoMenu=534, hitRow=1000
 };
 struct Image {
     HBITMAP bitmap{};
@@ -66,13 +68,18 @@ public:
     void Shade();
     bool Translate(const MSG& message);
     HRESULT Layout(TtpSkinLayout& state,bool restore);
+    bool Handles(HWND window) const;
+    HMENU Menu(HWND window,uint32_t command);
+    bool ContentState(TtpSkinContent& state,bool apply);
+    bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
     struct SavedLayout {
-        std::array<RECT,3> bounds{};
-        std::array<bool,3> shaded{};
-        std::array<int,3> expanded{116,232,116};
+        std::array<RECT,4> bounds{};
+        std::array<bool,4> shaded{};
+        std::array<int,4> expanded{116,232,116,290};
         int scale{1},scroll{};
+        int content_mode{TTP_SKIN_CONTENT_LYRICS},visual_type{1};
     } layout_;
     bool binding_{};
     void CaptureLayout() noexcept;
@@ -83,6 +90,7 @@ private:
     int scale_{1}, row_height_{13};
     COLORREF text_color_{RGB(0,255,0)};
     COLORREF text_background_{RGB(0,0,0)};
+    COLORREF video_text_{RGB(0,255,0)},video_background_{RGB(0,0,0)};
     unsigned feedback_until_{};
     std::wstring feedback_;
     uint32_t stats_index_{}, stats_count_{};
@@ -98,7 +106,7 @@ private:
     void SelectRow(View& view,int row);
     HCURSOR Cursor(const View& view,POINT point) const;
     std::unordered_map<std::string,std::string> ini_;
-    std::array<View,3> views_{};
+    std::array<View,4> views_{};
     TtpSkinHost host_{};
     HFONT font_{};
     COLORREF normal_{RGB(0,255,0)}, current_{RGB(255,255,255)}, background_{RGB(0,0,0)}, selection_{RGB(0,0,198)};
@@ -114,6 +122,9 @@ private:
     void DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinState& state);
     void DrawPlaylistTime(HDC dc,int width,int height,const TtpSkinState& state) const;
     void DrawEqualizer(View& view,HDC dc,const TtpSkinState& state);
+    void DrawVideo(View& view,HDC dc,int width,int height);
+    void VideoAction(View& view,int hit);
+    void VideoContentChanged();
     int Hit(const View& view,POINT point,RECT* bounds=nullptr) const;
     void Activate(View& view,int hit,POINT point);
     void Track(View& view,int hit,POINT point);

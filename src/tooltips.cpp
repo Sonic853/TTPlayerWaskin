@@ -4,6 +4,7 @@
 namespace waskin {
 std::wstring Skin::TipText(const View& view,int hit,const RECT& bounds) const {
     if(!hit || hit==hitDrag || hit>=hitRow) return {};
+    if(view.kind==3 && hit==TTP_SKIN_LYRICS) return L"关闭歌词／视觉窗口";
     const auto state=State();
     if(bounds.top==3 && view.kind && (hit==TTP_SKIN_PLAYLIST || hit==TTP_SKIN_EQUALIZER))
         return view.kind==1?L"关闭播放列表":L"关闭均衡器";
@@ -57,6 +58,11 @@ std::wstring Skin::TipText(const View& view,int hit,const RECT& bounds) const {
     case hitEqUp: return L"全部频段设为 +12 dB";
     case hitEqFlat: return L"全部频段归零";
     case hitEqDown: return L"全部频段设为 -12 dB";
+    case hitVideoFullscreen: return L"全屏显示当前内容";
+    case hitVideoNormal: return L"恢复普通窗口大小";
+    case hitVideoDouble: return L"双倍窗口大小";
+    case hitVideoMode: return L"切换歌词／视觉效果／歌词与视觉同屏";
+    case hitVideoMenu: return L"显示内容和视觉效果菜单";
     case hitListAdd: return L"添加";
     case hitListRem: return L"删除";
     case hitListSel: return L"编辑／选择";
@@ -91,7 +97,7 @@ void Skin::UpdateTip(View& view,POINT point) {
         SendMessageW(view.tooltip,CCM_SETUNICODEFORMAT,TRUE,0);
         SendMessageW(view.tooltip,TTM_SETMAXTIPWIDTH,0,400);
     }
-    const int scale=view.kind==1?1:scale_;
+    const int scale=(view.kind==1 || view.kind==3)?1:scale_;
     if(view.tip_hit!=hit || !EqualRect(&view.tip_bounds,&bounds)) {
         HideTip(view);view.tip_hit=hit;view.tip_bounds=bounds;
         // v5 common controls reject the v6 reserved tail. No v6 fields are used.

@@ -72,6 +72,17 @@ Image MakeFallback(const char* name,int width,int height) {
         for(int y:{0,15}) {label(0,y,60,14,L"EQ");fill(61,y+3,102,7,RGB(10,15,20));fill(166,y+3,44,7,RGB(10,15,20));button(254,y+3,9,9,L"+");button(264,y+3,9,9,L"x");}
         for(int i=0;i<6;++i) fill(1+i*3,30,3,7,RGB(130,190,150));
         button(1,38,9,9,L"_",true);button(1,47,9,9,L"+",true);button(11,38,9,9,L"x");button(11,47,9,9,L"x",true);
+    } else if(n=="video.bmp") {
+        for(int y:{0,21}) {
+            label(26,y,100,20,L"TTPlayer Lyrics");
+            button(167,y+3,9,9,L"x");
+        }
+        button(148,42,9,9,L"x",true);
+        const wchar_t* icons[]={L"F",L"1",L"2",L"T",L"..."};
+        for(int i=0;i<5;++i) {
+            button(9+i*15,51,15,18,icons[i]);
+            button(158+i*15,42,15,18,icons[i],true);
+        }
     } else if(n=="pledit.bmp") {
         label(26,0,100,20,L"TTPlayer Playlist");label(26,21,100,20,L"TTPlayer Playlist");
         // Toolbar artwork lives in the two bottom strips, including LIST in
