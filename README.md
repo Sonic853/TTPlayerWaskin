@@ -1,5 +1,8 @@
 # ttp_waskin
 
+<img width="550" height="475" alt="image" src="https://github.com/user-attachments/assets/62f4d05d-9628-43b7-a0b1-114e4359c375" />
+
+
 TTPlayerRebuild 的可选 Winamp 经典皮肤插件，输出名称为 **`ttp_waskin.dll`**。
 
 ## 使用
