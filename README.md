@@ -63,7 +63,7 @@ cmake -S . -B build -G "Visual Studio 18 2026" -A Win32
 cmake --build build --config Release --parallel 4
 ```
 
-唯一分发产物：`build/Release/ttp_waskin.dll`。构建始终使用同级 `rebuild` 的 VC-LTL／YY-Thunks 旧系统工具链，并在链接后执行 XP、Win7 导入审计，不再提供普通／旧系统 DLL 的构建开关。接口不跨模块传递 CRT 内存或 STL 对象，因此同一份 DLL 可供两种运行库的宿主使用。安装时同时附带第三方许可说明。
+唯一分发产物：`build/Release/ttp_waskin.dll`。本仓库可单独检出并构建，无需同级 `rebuild`。构建始终使用 VC-LTL 5.3.1／YY-Thunks 1.2.2 旧系统工具链，首次配置时下载并校验固定 SHA-256；需要 Python 3，在链接后执行 XP、Win7 导入审计，不再提供普通／旧系统 DLL 的构建开关。接口不跨模块传递 CRT 内存或 STL 对象，因此同一份 DLL 可供两种运行库的宿主使用。第三方许可文本保存在仓库中，CMake 安装时还会附带文本说明。
 
 可以安装至指定播放器目录：
 
@@ -72,6 +72,24 @@ cmake --install build --config Release --prefix "D:/path/to/TTPlayer"
 ```
 
 宿主接口定义见 [include/ttp_skin_plugin.h](include/ttp_skin_plugin.h)。目前宿主仓库保留相同内容的 SDK 头文件；变更 ABI 时需同步两端并升级版本。
+
+### GitHub Actions 独立构建与发布
+
+[Manual Waskin Build](.github/workflows/manual-build.yml) 仅构建本仓库的 x86 Release DLL，不构建播放器、不检出或运行测试。工作流进入默认分支后，在 Actions → Manual Waskin Build → Run workflow 中选择分支：
+
+- 不勾选 **Release a Version**：只构建，下载 `ttp_waskin-版本号` artifact，保留 14 天，不创建 tag 或 Release。
+- 勾选 **Release a Version**：构建成功后，独立的 **GitHub Release** 作业创建同名 tag 和 Release，发布 `ttp_waskin-版本号.zip`。tag 指向此次构建的提交，无需额外配置 token secret。
+- 发布版本与重建版相同：按构建开始时的北京时间取 `yyyy.MM.dd`，当天首次例如 `2026.09.20`，再次为 `2026.09.20p1`、`2026.09.20p2`。读取全部 tag 和 Release（包括占用版本号的草稿），按数字递增；发布流程串行，已有版本不覆盖。仅构建时使用当天日期。
+
+下载的 artifact ZIP 与 Release ZIP 均只含以下文件，可直接解压到播放器目录：
+
+```text
+AddIn/
+  ttp_waskin.dll
+SHA256SUMS.txt
+```
+
+`SHA256SUMS.txt` 记录 `AddIn/ttp_waskin.dll` 的 SHA-256。普通版和 XP／Win7 版使用同一包。工作流保留 XP／Win7 静态导入审计；该检查不替代旧系统上的实际运行验证。
 
 ## 本地验证
 

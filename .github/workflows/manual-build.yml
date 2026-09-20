@@ -1,0 +1,202 @@
+name: Manual Waskin Build
+run-name: Waskin x86 ${{ inputs.release_a_version && 'Release' || 'Build' }} - ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_a_version:
+        description: Release a Version
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# Allocate the version and publish within one slot, including the build time.
+# Build-only runs do not reserve a tag and can run independently.
+concurrency:
+  group: ${{ inputs.release_a_version && 'manual-waskin-release' || format('manual-waskin-build-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build DLL (VS 2026, Windows x86)
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      previous: ${{ steps.version.outputs.previous }}
+      dll_sha256: ${{ steps.package.outputs.dll_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Determine version (Beijing date)
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RELEASE: ${{ inputs.release_a_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Read-VersionTag([string]$name) {
+            $match = [regex]::Match($name, '^(?<date>[0-9]{4}\.[0-9]{2}\.[0-9]{2})(?:p(?<patch>[1-9][0-9]*))?$')
+            if (-not $match.Success) { return }
+            $date = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact($match.Groups['date'].Value, 'yyyy.MM.dd',
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]$date)) { return }
+            $patch = 0L
+            if ($match.Groups['patch'].Success -and -not [long]::TryParse($match.Groups['patch'].Value, [ref]$patch)) {
+              throw 'Version patch number is too large.'
+            }
+            [pscustomobject]@{ Name = $name; Date = $date; Patch = $patch }
+          }
+          # Match TTPlayerRebuild: yyyy.MM.dd, then p1, p2, ... on the same day.
+          $releaseDate = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString(
+            'yyyy.MM.dd', [Globalization.CultureInfo]::InvariantCulture)
+          $base = Read-VersionTag $releaseDate
+          $version = $base.Name
+          $previous = $null
+          if ($env:PUBLISH_RELEASE -eq 'true') {
+            $tags = @(gh api "repos/$env:GITHUB_REPOSITORY/tags?per_page=100" --paginate --jq '.[].name')
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read repository tags.' }
+            # A failed upload can leave a draft with no tag; reserve its name too.
+            $releaseTags = @(gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq '.[].tag_name')
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read existing releases.' }
+            $versions = @($tags | ForEach-Object { Read-VersionTag $_ })
+            $occupied = @($versions) + @($releaseTags | ForEach-Object { Read-VersionTag $_ })
+            $sameDay = @($occupied | Where-Object { $_.Date -eq $base.Date } | Sort-Object Patch -Descending)
+            if ($sameDay.Count) {
+              if ($sameDay[0].Patch -eq [long]::MaxValue) { throw 'Version patch number is exhausted.' }
+              $version += 'p' + ($sameDay[0].Patch + 1).ToString([Globalization.CultureInfo]::InvariantCulture)
+            }
+            $previous = $versions | Sort-Object Date, Patch -Descending | Select-Object -First 1
+          }
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "previous=$($previous.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Output "Package version: $version"
+
+      - name: Verify VS 2026 toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --version
+          $capabilitiesJson = cmake -E capabilities
+          if ($LASTEXITCODE -ne 0) { throw 'Could not query CMake capabilities.' }
+          $capabilities = $capabilitiesJson | ConvertFrom-Json
+          if ($capabilities.generators.name -notcontains 'Visual Studio 18 2026') {
+            throw 'Visual Studio 2026 requires CMake 4.2 or newer.'
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw 'vswhere.exe is missing from the runner.' }
+          $installation = & $vswhere -latest -products '*' -version '[18.0,19.0)' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $installation) { throw 'Visual Studio 2026 C++ tools were not found.' }
+          "WASKIN_VS_INSTANCE=$($installation.Trim())" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Only this repository is needed. One Release DLL serves both host editions.
+      # No local tests, player sources, runtime files or private skins are checked out.
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G "Visual Studio 18 2026" -A Win32
+          "-DCMAKE_GENERATOR_INSTANCE=$env:WASKIN_VS_INSTANCE"
+
+      - name: Build and audit XP and Windows 7 imports
+        run: cmake --build build --config Release --target ttp_waskin --parallel 4
+
+      - name: Prepare package
+        id: package
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = 'build/Release/ttp_waskin.dll'
+          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { throw 'The plugin DLL was not produced.' }
+          New-Item -ItemType Directory -Path build/package/AddIn | Out-Null
+          Copy-Item -LiteralPath $dll -Destination build/package/AddIn/ttp_waskin.dll
+          $hash = (Get-FileHash -LiteralPath build/package/AddIn/ttp_waskin.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  AddIn/ttp_waskin.dll" | Set-Content -LiteralPath build/package/SHA256SUMS.txt -Encoding ascii
+          "dll_sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # Downloading this artifact produces a ZIP with AddIn/ and SHA256SUMS.txt
+      # at its root, without a second ZIP or a containing package/ directory.
+      - name: Upload plugin
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ttp_waskin-${{ steps.version.outputs.value }}
+          path: build/package/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload configure diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: waskin-configure-log-${{ github.run_number }}
+          path: build/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  github_release:
+    name: GitHub Release
+    needs: build
+    if: inputs.release_a_version
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+      PREVIOUS_VERSION: ${{ needs.build.outputs.previous }}
+      DLL_SHA256: ${{ needs.build.outputs.dll_sha256 }}
+    steps:
+      - name: Download plugin
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ttp_waskin-${{ needs.build.outputs.version }}
+          path: package
+
+      - name: Verify and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:RELEASE_VERSION
+          if ($version -notmatch '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}(?:p[1-9][0-9]*)?$') {
+            throw 'Missing or invalid release version.'
+          }
+          $files = @(Get-ChildItem -LiteralPath package -File -Recurse -Force)
+          if ($files.Count -ne 2 -or
+              -not (Test-Path -LiteralPath package/AddIn/ttp_waskin.dll -PathType Leaf) -or
+              -not (Test-Path -LiteralPath package/SHA256SUMS.txt -PathType Leaf)) {
+            throw 'The package must contain only AddIn/ttp_waskin.dll and SHA256SUMS.txt.'
+          }
+          $hash = (Get-FileHash -LiteralPath package/AddIn/ttp_waskin.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = (Get-Content -LiteralPath package/SHA256SUMS.txt -Raw).Trim()
+          if ($hash -cne $env:DLL_SHA256 -or $manifest -cne "$hash  AddIn/ttp_waskin.dll") {
+            throw 'Plugin SHA-256 verification failed.'
+          }
+          $archive = "ttp_waskin-$version.zip"
+          Compress-Archive -Path package/* -DestinationPath $archive
+          $repoUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY"
+          $logUrl = if ($env:PREVIOUS_VERSION) { "$repoUrl/compare/$env:PREVIOUS_VERSION...$version" }
+                    else { "$repoUrl/commits/$version" }
+          $notes = @(
+            "**完整更新日志**: $logUrl",
+            '',
+            "下载 $archive，解压到 TTPlayerRebuild.exe 所在目录，保留 AddIn 子目录，然后重启播放器。",
+            '普通版和 XP／Win7 版共用同一份 x86 DLL；需要支持 Plugin Skin 接口的重建版。',
+            '经典 WSZ 皮肤放在 Skin/waskin 目录。压缩包中的 SHA256SUMS.txt 用于校验 AddIn/ttp_waskin.dll。',
+            '',
+            "[第三方组件、许可证与对应源码]($repoUrl/blob/$env:GITHUB_SHA/docs/LEGACY_DEPENDENCIES.md)。许可文本保存在仓库中。"
+          ) -join "`n"
+          $notes | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          gh release create "$version" $archive --repo "$env:GITHUB_REPOSITORY" `
+            --target "$env:GITHUB_SHA" --title "$version" --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub publication failed; existing releases are not overwritten.' }
