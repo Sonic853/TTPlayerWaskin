@@ -64,7 +64,7 @@ public:
     HRESULT Attach(const TtpSkinWindows& windows);
     void Detach() noexcept;
     HBITMAP Preview();
-    void Paint(HWND window,HDC dc);
+    void Paint(HWND window,HDC dc,bool child_background=false);
     void Shade();
     bool Translate(const MSG& message);
     HRESULT Layout(TtpSkinLayout& state,bool restore);

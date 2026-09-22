@@ -505,7 +505,7 @@ void Skin::Draw(View& view,HDC dc,int width,int height) {
     else DrawVideo(view,dc,width,height);
     RestoreDC(dc,saved);
 }
-void Skin::Paint(HWND window,HDC dc) {
+void Skin::Paint(HWND window,HDC dc,bool child_background) {
     for(auto& view:views_) if(view.window==window) {
         RECT rect{}; GetClientRect(window,&rect);
         if(IsIconic(window)) GetClipBox(dc,&rect);
@@ -517,12 +517,15 @@ void Skin::Paint(HWND window,HDC dc) {
         Draw(view,memory,rect.right/scale,rect.bottom/scale);
         SetMapMode(memory,MM_TEXT);
         // The supplied DC can come from GetDC/WM_PRINTCLIENT as well as
-        // BeginPaint. Explicitly exclude live host widgets in every path;
-        // the lyric parent does not necessarily have WS_CLIPCHILDREN.
+        // BeginPaint. Protect live host widgets; the lyric parent does not
+        // necessarily have WS_CLIPCHILDREN. A transparent child's erase DC
+        // needs its clean backing, while opaque RichEdit pixels stay excluded.
         const int saved=SaveDC(dc);
         if(!saved) {SelectObject(memory,old);DeleteObject(bitmap);DeleteDC(memory);return;}
         if(view.kind==3) for(HWND child=GetWindow(window,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
-            if(GetPropW(child,TTP_SKIN_CONTENT_CHILD) && (GetWindowLongPtrW(child,GWL_STYLE)&WS_VISIBLE)) {
+            const auto role=reinterpret_cast<UINT_PTR>(GetPropW(child,TTP_SKIN_CONTENT_CHILD));
+            if(role && (GetWindowLongPtrW(child,GWL_STYLE)&WS_VISIBLE) &&
+               !(child_background && role==TTP_SKIN_CONTENT_CHILD_TRANSPARENT)) {
                 RECT bounds{};GetWindowRect(child,&bounds);
                 MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&bounds),2);
                 ExcludeClipRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom);
@@ -924,7 +927,16 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     }
     case WM_PAINT: { PAINTSTRUCT p{};HDC dc=BeginPaint(v.window,&p);Paint(v.window,dc);EndPaint(v.window,&p);return 0; }
     case WM_PRINTCLIENT: Paint(v.window,reinterpret_cast<HDC>(wp));return 0;
-    case WM_ERASEBKGND: return 1;
+    case WM_ERASEBKGND:
+        if(v.kind==3 && wp) {
+            const auto dc=reinterpret_cast<HDC>(wp);
+            // TBSTYLE_TRANSPARENT forwards erasing with a translated child
+            // DC (or themed memory DC). Returning success without drawing
+            // leaves hover/pressed pixels behind. Parent screen DCs must
+            // still preserve the live toolbar as well as the editor.
+            Paint(v.window,dc,WindowFromDC(dc)!=v.window);
+        }
+        return 1;
     case WM_NCHITTEST: return HTCLIENT;
     case WM_SIZE: HideTip(v);if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);} return 0;
     case WM_TIMER:
