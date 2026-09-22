@@ -91,6 +91,11 @@ bool Skin::LyricColors(HWND window,TtpSkinLyricColors& colors) const {
     return true;
 }
 
+bool Skin::ContentMinimum(HWND window,SIZE& size) const {
+    if(!window || window!=views_[3].window) return false;
+    size={275,116};return true;
+}
+
 void Skin::VideoContentChanged() {
     CaptureLayout();
     auto& view=views_[3];

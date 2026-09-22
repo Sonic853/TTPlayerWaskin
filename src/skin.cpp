@@ -991,6 +991,14 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
                 if(std::abs(raw.x-v.drag_start.x)>=GetSystemMetrics(SM_CXDRAG) || std::abs(raw.y-v.drag_start.y)>=GetSystemMetrics(SM_CYDRAG)) v.row_drag=true;
                 if(v.row_drag) {
                     RECT r{};GetClientRect(v.window,&r);v.drop=-1;
+                    if(!PtInRect(&r,raw)) {
+                        // DoDragDrop pumps messages and may unload this skin.
+                        // Finish this gesture first, then let the queued host
+                        // command enter OLE after the DLL has left the stack.
+                        v.pressed=0;v.row_drag=false;v.selection_pending=false;
+                        HideTip(v);ReleaseCapture();InvalidateRect(v.window,nullptr,FALSE);
+                        Command(TTP_SKIN_DRAG_SELECTION);return 0;
+                    }
                     if(Inside(point,12,22,r.right-32,r.bottom-60)) {
                         if(point.y<22+row_height_) v.scroll=std::max(0,v.scroll-1);
                         else if(point.y>=r.bottom-38-row_height_) v.scroll=std::min(std::max(0,int(State().track_count)-1),v.scroll+1);

@@ -71,6 +71,7 @@ public:
     bool Handles(HWND window) const;
     HMENU Menu(HWND window,uint32_t command);
     bool ContentState(TtpSkinContent& state,bool apply);
+    bool ContentMinimum(HWND window,SIZE& size) const;
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
     bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
