@@ -1,4 +1,5 @@
 #include "skin.h"
+#include "builtin_skin.h"
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -6,6 +7,7 @@
 #include <cwctype>
 #include <sstream>
 #include <stdexcept>
+#include <optional>
 
 namespace waskin {
 namespace {
@@ -121,7 +123,10 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         if(host->size>=offsetof(TtpSkinHost,content_input)) host_.content=host->content;
         if(host->size>=sizeof(TtpSkinHost)) host_.content_input=host->content_input;
     }
-    Archive archive(path);
+    const auto& builtin=BuiltinArchive();
+    std::optional<Archive> package;
+    if(!IsBuiltinPackage(path)) package.emplace(path);
+    const auto& archive=package?*package:builtin;
     struct Spec {const char* name;int w,h;};
     const Spec specs[]={
         {"main.bmp",275,116},{"cbuttons.bmp",136,36},
@@ -144,11 +149,17 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
                 if(decoded.bitmap) {recognized=true;images_.emplace(spec.name,std::move(decoded));}
             } catch(const std::runtime_error&) {}
         }
-        fallback_.emplace(spec.name,MakeFallback(spec.name,spec.w,spec.h));
+        const auto defaults=builtin.Read(spec.name);
+        fallback_.emplace(spec.name,defaults.empty()?MakeFallback(spec.name,spec.w,spec.h):Image(defaults));
     }
     if(!recognized) throw std::runtime_error("No valid classic skin resources");
-    ReadIni(archive.Read("pledit.txt"),"playlist/",ini_);
-    ReadIni(archive.Read("region.txt"),"region/",ini_);
+    metadata_=ReadMetadata(archive.Read("skininfo.xml"));
+    ReadIni(builtin.Read("pledit.txt"),"playlist/",ini_);
+    ReadIni(builtin.Read("region.txt"),"region/",ini_);
+    if(package) {
+        ReadIni(archive.Read("pledit.txt"),"playlist/",ini_);
+        ReadIni(archive.Read("region.txt"),"region/",ini_);
+    }
     normal_=Color(ini_["playlist/text/normal"],normal_);
     current_=Color(ini_["playlist/text/current"],current_);
     background_=Color(ini_["playlist/text/normalbg"],background_);
@@ -168,7 +179,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
         if(count>0 && count<LF_FACESIZE) {face.resize(count);MultiByteToWideChar(CP_UTF8,0,text_font.data(),int(text_font.size()),face.data(),count);}
     }
     std::istringstream colors(std::string{});
-    const auto palette_bytes=archive.Read("viscolor.txt");
+    const auto palette_bytes=(archive.Has("viscolor.txt")?archive:builtin).Read("viscolor.txt");
     colors.str(std::string(palette_bytes.begin(),palette_bytes.end()));
     auto& palette=visual_palette_;size_t at=0;std::string line;
     while(at<palette.size() && std::getline(colors,line)) {
@@ -180,7 +191,10 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
     for(const char* name:{"volbal","posbar","winbut","min","close","mainmenu","titlebar","songname","normal",
         "wsposbar","mmenu","wsnormal","pwinbut","pclose","ptbar","pvscroll","psize","pnormal","pwssize","pwsnorm",
         "eqslid","eqclose","eqtitle","eqnormal","vnormal","vclose","vsize","vtbar","vmbuts"}) {
-        if(auto cursor=ReadCursor(archive.Read(std::string(name)+".cur"))) cursors_.emplace(name,CursorHandle(cursor));
+        const auto resource=std::string(name)+".cur";
+        auto cursor=ReadCursor(archive.Read(resource));
+        if(!cursor && package) cursor=ReadCursor(builtin.Read(resource));
+        if(cursor) cursors_.emplace(name,CursorHandle(cursor));
     }
     font_=CreateFontW(-11,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
         NONANTIALIASED_QUALITY,DEFAULT_PITCH,face.c_str());

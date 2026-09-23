@@ -1,5 +1,6 @@
 #pragma once
 #include "archive.h"
+#include "metadata.h"
 #include "ttp_skin_plugin.h"
 #include <array>
 #include <string>
@@ -61,6 +62,7 @@ class Skin {
 public:
     Skin(const wchar_t* path,const TtpSkinHost* host);
     ~Skin();
+    const Metadata& Info() const {return metadata_;}
     HRESULT Attach(const TtpSkinWindows& windows);
     void Detach() noexcept;
     HBITMAP Preview();
@@ -76,6 +78,7 @@ public:
     bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
+    Metadata metadata_;
     struct SavedLayout {
         std::array<RECT,4> bounds{};
         std::array<bool,4> shaded{};

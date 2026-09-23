@@ -3,7 +3,7 @@
 #include <cstring>
 
 namespace waskin {
-// Project-owned GDI artwork. No Winamp bitmaps are embedded or redistributed.
+// Last-resort artwork only for resources absent from the embedded base skin.
 Image MakeFallback(const char* name,int width,int height) {
     Image out;out.width=width;out.height=height;
     HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);

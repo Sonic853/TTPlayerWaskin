@@ -140,14 +140,22 @@ uint32_t Crc(const Bytes& bytes) {
 }
 }
 
-Archive::Archive(const wchar_t* path) {
+namespace {
+Bytes ReadArchiveFile(const wchar_t* path) {
     HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(file==INVALID_HANDLE_VALUE) Invalid();
     LARGE_INTEGER size{}; DWORD read{};
     if(!GetFileSizeEx(file,&size) || size.QuadPart<22 || size.QuadPart>64*1024*1024) { CloseHandle(file); Invalid(); }
-    try { bytes_.resize(size_t(size.QuadPart)); } catch(...) { CloseHandle(file); throw; }
-    const BOOL ok=ReadFile(file,bytes_.data(),DWORD(bytes_.size()),&read,nullptr); CloseHandle(file);
-    if(!ok || read!=bytes_.size()) Invalid();
+    Bytes bytes;
+    try { bytes.resize(size_t(size.QuadPart)); } catch(...) { CloseHandle(file); throw; }
+    const BOOL ok=ReadFile(file,bytes.data(),DWORD(bytes.size()),&read,nullptr); CloseHandle(file);
+    if(!ok || read!=bytes.size()) Invalid();
+    return bytes;
+}
+}
+Archive::Archive(const wchar_t* path):Archive(ReadArchiveFile(path)) {}
+Archive::Archive(Bytes bytes):bytes_(std::move(bytes)) {
+    if(bytes_.size()<22 || bytes_.size()>64*1024*1024) Invalid();
     size_t end=bytes_.size()-22; const size_t lower=end>65535?end-65535:0;
     for(;;) {
         if(U32(bytes_.data()+end)==0x06054b50 && end+22+U16(bytes_.data()+end+20)==bytes_.size()) break;
@@ -192,7 +200,7 @@ Archive::Archive(const wchar_t* path) {
     for(const auto& [resource,entry]:entries_) {
         const auto slash=resource.find_last_of('/');
         const auto name=slash==std::string::npos?resource:resource.substr(slash+1);
-        if(!name.ends_with(".bmp") && !name.ends_with(".txt") && !name.ends_with(".cur")) continue;
+        if(!name.ends_with(".bmp") && !name.ends_with(".txt") && !name.ends_with(".cur") && name!="skininfo.xml") continue;
         if(!flattened.emplace(name,entry).second) Invalid();
     }
     entries_=std::move(flattened);
