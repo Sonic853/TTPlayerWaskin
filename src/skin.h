@@ -45,6 +45,7 @@ struct View {
     int tip_hit{};
     RECT tip_bounds{};
     std::wstring tip_text;
+    DWORD tip_tick{};
     int kind{};
     RECT saved{}, drag_rect{};
     HRGN saved_region{};
@@ -138,6 +139,7 @@ private:
     void HideChildren(View& view);
     void UpdateTip(View& view,POINT point);
     void HideTip(View& view) noexcept;
+    void RefreshRowTip(View& view);
     std::wstring TipText(const View& view,int hit,const RECT& bounds) const;
     bool HostDrag(View& view, uint32_t phase, POINT point = {}) const;
     void EndDrag(View& view);

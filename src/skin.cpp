@@ -779,7 +779,11 @@ int Skin::Hit(const View& v,POINT p,RECT* bounds) const {
         if(inside(r.right-15,r.bottom-31,8,5)) return hitScrollDown;
         if(inside(r.right-15,20,8,r.bottom-58)) return hitScroll;
         const int rows=std::max(1,(int(r.bottom)-60)/row_height_);
-        if(inside(12,22,r.right-32,rows*row_height_)) return hitRow+v.scroll+(p.y-22)/row_height_;
+        if(inside(12,22,r.right-32,rows*row_height_)) {
+            const int row=(p.y-22)/row_height_;
+            if(bounds) *bounds={12,22+row*row_height_,r.right-20,22+(row+1)*row_height_};
+            return hitRow+v.scroll+row;
+        }
         const int xs[]={14,43,72,101,int(r.right)-44};
         for(int i=0;i<5;++i) if(inside(xs[i],r.bottom-30,22,18)) return hitListAdd+i;
         for(int i=0;i<6;++i) if(inside(r.right-144+i*9,r.bottom-15,9,8)) return buttons[i];
@@ -954,7 +958,7 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     case WM_NCHITTEST: return HTCLIENT;
     case WM_SIZE: HideTip(v);if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);} return 0;
     case WM_TIMER:
-        if(wp==timerId) { if(v.kind==0) {++ticks_;UpdateStatistics();} HideChildren(v);InvalidateRect(v.window,nullptr,FALSE);return 0; } break;
+        if(wp==timerId) { if(v.kind==0) {++ticks_;UpdateStatistics();} RefreshRowTip(v);HideChildren(v);InvalidateRect(v.window,nullptr,FALSE);return 0; } break;
     case WM_ACTIVATE: if(LOWORD(wp)==WA_INACTIVE) HideTip(v);InvalidateRect(v.window,nullptr,FALSE);break;
     case WM_ENABLE: if(!wp) HideTip(v);break;
     case WM_SETCURSOR: {POINT cursor{};GetCursorPos(&cursor);ScreenToClient(v.window,&cursor);cursor.x/=scale;cursor.y/=scale;SetCursor(Cursor(v,cursor));return TRUE;}

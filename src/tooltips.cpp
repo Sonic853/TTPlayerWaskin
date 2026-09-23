@@ -1,9 +1,23 @@
 #include "skin.h"
 #include <windowsx.h>
 
+// XP-targeted SDK headers omit this tooltip style; older controls ignore it.
+#ifndef TTS_USEVISUALSTYLE
+#define TTS_USEVISUALSTYLE 0x100
+#endif
+
 namespace waskin {
 std::wstring Skin::TipText(const View& view,int hit,const RECT& bounds) const {
-    if(!hit || hit==hitDrag || hit>=hitRow) return {};
+    if(!hit || hit==hitDrag) return {};
+    if(hit>=hitRow) {
+        if(view.kind!=1 || !host_.tip || uint32_t(hit-hitRow)>=State().track_count) return {};
+        const auto required=host_.tip(host_.context,TTP_SKIN_TRACK_TIP,hit-hitRow,nullptr,0);
+        if(required<=1 || required>1024*1024) return {};
+        std::wstring text(size_t(required),L'\0');
+        const auto result=host_.tip(host_.context,TTP_SKIN_TRACK_TIP,hit-hitRow,text.data(),uint32_t(text.size()));
+        if(result<=1 || result>required) return {};
+        text.resize(wcsnlen_s(text.data(),text.size()));return text;
+    }
     if(view.kind==3 && hit==TTP_SKIN_LYRICS) return L"关闭歌词／视觉窗口";
     const auto state=State();
     if(bounds.top==3 && view.kind && (hit==TTP_SKIN_PLAYLIST || hit==TTP_SKIN_EQUALIZER))
@@ -88,9 +102,12 @@ void Skin::UpdateTip(View& view,POINT point) {
     for(auto& other:views_) if(&other!=&view && other.tip_hit) HideTip(other);
     if(GetCapture() || !IsWindowEnabled(view.window)) {HideTip(view);return;}
     RECT bounds{};const int hit=Hit(view,point,&bounds);
-    if(TipText(view,hit,bounds).empty()) {HideTip(view);return;}
+    // Defer row metadata queries until the tooltip's normal hover delay has
+    // elapsed. Merely moving over a song must not format/read its tags.
+    if(hit>=hitRow ? view.kind!=1 || !host_.tip || uint32_t(hit-hitRow)>=State().track_count
+                   : TipText(view,hit,bounds).empty()) {HideTip(view);return;}
     if(!view.tooltip) {
-        view.tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,TTS_NOPREFIX,
+        view.tooltip=CreateWindowExW(WS_EX_TOPMOST,TOOLTIPS_CLASSW,nullptr,TTS_NOPREFIX | TTS_USEVISUALSTYLE,
             CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,CW_USEDEFAULT,view.window,nullptr,
             reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(view.window,GWLP_HINSTANCE)),nullptr);
         if(!view.tooltip) return;
@@ -111,5 +128,20 @@ void Skin::UpdateTip(View& view,POINT point) {
     event.lParam=MAKELPARAM(point.x*scale,point.y*scale);event.time=GetMessageTime();
     event.pt={point.x*scale,point.y*scale};ClientToScreen(view.window,&event.pt);
     SendMessageW(view.tooltip,TTM_RELAYEVENT,0,reinterpret_cast<LPARAM>(&event));
+}
+void Skin::RefreshRowTip(View& view) {
+    if(view.kind!=1 || view.tip_hit<hitRow || !view.tooltip) return;
+    POINT point{};RECT bounds{};
+    if(GetCapture() || !GetCursorPos(&point) || !ScreenToClient(view.window,&point) ||
+       Hit(view,point,&bounds)!=view.tip_hit || !EqualRect(&bounds,&view.tip_bounds) ||
+       uint32_t(view.tip_hit-hitRow)>=State().track_count) {HideTip(view);return;}
+    // Metadata arrives asynchronously. Refresh only a visible song tip, at
+    // most twice a second, without restarting its hover/autopop timers.
+    const DWORD now=GetTickCount();
+    if(!IsWindowVisible(view.tooltip) || now-view.tip_tick<500) return;
+    view.tip_tick=now;
+    const auto text=TipText(view,view.tip_hit,view.tip_bounds);
+    if(text.empty()) {HideTip(view);return;}
+    if(text!=view.tip_text) SendMessageW(view.tooltip,TTM_UPDATE,0,0);
 }
 }
