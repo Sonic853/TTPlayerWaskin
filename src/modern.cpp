@@ -4,6 +4,7 @@
 #include "modern_capabilities.h"
 #include "maki_client.h"
 #include "builtin_skin.h"
+#include "modern_vis.h"
 #include <windowsx.h>
 #include <sstream>
 #include <iomanip>
@@ -78,6 +79,9 @@ struct Modern::Impl {
  bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
  std::vector<std::pair<HWND,bool>> children;std::unique_ptr<Gdiplus::Bitmap> frame;
  bool restoreLeft{},restoreRight{},restoreVis{};
+ RECT contentRect{},notifiedContent{};
+ uint32_t contentMode{TTP_SKIN_CONTENT_LYRICS},contentVisual{1};
+ std::unordered_map<Node*,ModernVis> visRenderers;
  explicit Impl(const wchar_t* path,const TtpSkinHost* h):archive(path,true),document(archive,true) {
   if(h){std::memcpy(&host,h,TTP_SKIN_HOST_V1_SIZE);
 #define COPY_HOST(field) if(h->size>=offsetof(TtpSkinHost,field)+sizeof(h->field))host.field=h->field
@@ -441,19 +445,29 @@ struct Modern::Impl {
   if(drop>=scroll && drop<=scroll+rows){Gdiplus::Pen pen(Gdiplus::Color(255,255,255,255));int y=r.top+(drop-scroll)*14;g.DrawLine(&pen,r.left,y,r.right-1,y);}
   g.Restore(clip);
  }
- void Visual(Gdiplus::Graphics& g,RECT r,bool nativeSpectrum) {
+ #include "modern_content.inc"
+ void Visual(Gdiplus::Graphics& g,RECT r,Node* n) {
   HDC screen=GetDC(nullptr),dc=CreateCompatibleDC(screen);HBITMAP bmp=CreateCompatibleBitmap(screen,r.right-r.left,r.bottom-r.top);ReleaseDC(nullptr,screen);
   if(!dc || !bmp){if(dc)DeleteDC(dc);if(bmp)DeleteObject(bmp);return;}
   auto old=SelectObject(dc,bmp);RECT local{0,0,r.right-r.left,r.bottom-r.top};FillRect(dc,&local,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-  if(nativeSpectrum && host.visual){TtpSkinVisualColors c{RGB(0,0,0),RGB(255,255,255),RGB(255,255,255),RGB(255,255,255),RGB(255,255,255),RGB(255,255,255)};host.visual(host.context,dc,&local,&c);}
-  else if(host.content)host.content(host.context,dc,&local,TTP_SKIN_CONTENT_VISUAL,1);
+  if(n->kind==L"vis") {
+   TtpSkinSpectrumFrame f{};f.size=sizeof(f);const auto style=VisStyle(n);
+   if(host.spectrum && host.spectrum(host.context,&f) && (f.type==2 || (f.type==3 && f.size>=sizeof(f)))) {
+    auto pixels=visRenderers[n].Render(f,style,GetTickCount());
+    BITMAPINFO info{};info.bmiHeader={sizeof(BITMAPINFOHEADER),72,-16,1,32,BI_RGB};SetStretchBltMode(dc,COLORONCOLOR);
+    StretchDIBits(dc,0,0,local.right,local.bottom,0,0,72,16,pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+   }else {
+    visRenderers.erase(n);
+    if(host.visual){TtpSkinVisualColors c{RGB(0,0,0),style.palette[2],style.palette[10],style.palette[17],style.palette[23],style.palette[18]};host.visual(host.context,dc,&local,&c);}
+   }
+  }else if(host.content)host.content(host.context,dc,&local,contentMode,contentVisual);
   SelectObject(dc,old);
   {Gdiplus::Bitmap canvas(bmp,nullptr);g.DrawImage(&canvas,Gdiplus::Rect(r.left,r.top,local.right,local.bottom),0,0,local.right,local.bottom,Gdiplus::UnitPixel);}
   DeleteObject(bmp);DeleteDC(dc);
  }
  #include "modern_render.inc"
  void Render(){
-  hits.clear();playlistRect={};Gdiplus::Graphics g(frame.get());g.Clear(Gdiplus::Color(0,0,0,0));
+  hits.clear();playlistRect={};contentRect={};Gdiplus::Graphics g(frame.get());g.Clear(Gdiplus::Color(0,0,0,0));
   g.SetInterpolationMode(Gdiplus::InterpolationModeNearestNeighbor);g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
   std::function<void(Node*,RECT,int,bool)> draw=[&](Node* n,RECT parent,int inheritedAlpha,bool parentEnabled){
    if(!n->visible)return;
@@ -488,7 +502,7 @@ struct Modern::Impl {
    }else if(n->kind==L"component" || n->kind==L"vis") {
     if(!IsRectEmpty(&r)) {
      Require(r.right-r.left<=2048 && r.bottom-r.top<=2048,"visual dimensions");
-     if(n->attrs[L"param"]==L"guid:pl")Playlist(g,r);else Visual(g,r,n->kind==L"vis");
+     if(n->attrs[L"param"]==L"guid:pl")Playlist(g,r);else {if(n->kind==L"component")contentRect=r;Visual(g,r,n);}
      if(enabled && !n->Get(L"ghost"))hits.push_back({n,r,nullptr});
     }
    }else if(n->kind==L"layer" && n->attrs.contains(L"move") && enabled && !n->Get(L"ghost") && !n->locked && !IsRectEmpty(&r)) {
@@ -518,7 +532,17 @@ struct Modern::Impl {
   std::memcpy(region->Buffer,spans.data(),spans.size()*sizeof(RECT));HRGN handle=ExtCreateRegion(nullptr,DWORD(storage.size()),region);
   if(handle){if(SetWindowRgn(window,handle,FALSE))regionRects=std::move(spans);else DeleteObject(handle);}
  }
- void Draw(HDC dc){Render();Gdiplus::Graphics g(dc);g.DrawImage(frame.get(),Gdiplus::Rect(0,0,frame->GetWidth(),frame->GetHeight()),0,0,frame->GetWidth(),frame->GetHeight(),Gdiplus::UnitPixel);}
+ void Draw(HDC dc,bool background=false){
+  Render();const int savedDC=SaveDC(dc);
+  if(window)for(HWND child=GetWindow(window,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+   const auto role=reinterpret_cast<UINT_PTR>(GetPropW(child,TTP_SKIN_CONTENT_CHILD));
+   if(role && IsWindowVisible(child) && !(background && role==TTP_SKIN_CONTENT_CHILD_TRANSPARENT)) {
+    RECT r{};GetWindowRect(child,&r);MapWindowPoints(nullptr,window,reinterpret_cast<POINT*>(&r),2);ExcludeClipRect(dc,r.left,r.top,r.right,r.bottom);
+   }
+  }
+  {Gdiplus::Graphics g(dc);g.DrawImage(frame.get(),Gdiplus::Rect(0,0,frame->GetWidth(),frame->GetHeight()),0,0,frame->GetWidth(),frame->GetHeight(),Gdiplus::UnitPixel);}
+  if(savedDC)RestoreDC(dc,savedDC);
+ }
  bool Drag(uint32_t phase,POINT p){if(!host.drag)return false;TtpSkinDrag d{sizeof(d),phase,window,p,TTP_SKIN_DRAG_WINDOW,{}};return host.drag(host.context,&d)!=FALSE;}
  void BeginMove(POINT p){
   dragAnchor=p;ClientToScreen(window,&dragAnchor);GetWindowRect(window,&dragOrigin);
@@ -563,11 +587,12 @@ struct Modern::Impl {
  }
  LRESULT Message(UINT message,WPARAM wp,LPARAM lp){
   POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+  LRESULT contentResult{};if(ContentInput(message,wp,lp,contentResult))return contentResult;
   switch(message){
-  case WM_ERASEBKGND:return 1;
+  case WM_ERASEBKGND:if(wp)Draw(reinterpret_cast<HDC>(wp),WindowFromDC(reinterpret_cast<HDC>(wp))!=window);return 1;
   case WM_PAINT:{PAINTSTRUCT ps{};auto dc=BeginPaint(window,&ps);try{Draw(dc);}catch(...){EndPaint(window,&ps);throw;}EndPaint(window,&ps);return 0;}
   case WM_PRINTCLIENT:Draw(reinterpret_cast<HDC>(wp));return 0;
-  case WM_TIMER:if(wp==modernTimer){if(!fault){Advance(GetTickCount());Render();Region();InvalidateRect(window,nullptr,FALSE);}return 0;}break;
+  case WM_TIMER:if(wp==modernTimer){if(!fault){Advance(GetTickCount());Render();SyncContent();Region();InvalidateRect(window,nullptr,FALSE);}return 0;}break;
   case WM_LBUTTONDOWN:
    SetFocus(window);pressed=HitTest(p);down=p;rowDragging=false;selectionPending=false;
    if(pressed && MouseEvent(pressed,L"onLeftButtonDown",p)){if(GetCapture()!=window)SetCapture(window);InvalidateRect(window,nullptr,FALSE);return 0;}
@@ -601,7 +626,7 @@ struct Modern::Impl {
    InvalidateRect(window,nullptr,FALSE);return 0;}
   case WM_LBUTTONDBLCLK:if(auto* n=HitTest(p);n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0)Command(TTP_SKIN_PLAY_ROW,row);}return 0;
   case WM_RBUTTONUP:{auto* n=HitTest(p);if(n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0 && !(host.selection && (host.selection(host.context,row)&1)))Select(row,0);Command(TTP_SKIN_LIST_MENU,row);}
-   else Command(TTP_SKIN_MENU);return 0;}
+   else Command(n && n->kind==L"vis"?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);return 0;}
   case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PtInRect(&playlistRect,p)){scroll=std::max(0,scroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3);InvalidateRect(window,nullptr,FALSE);}
    else Command(TTP_SKIN_VOLUME,std::clamp(State().volume+GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*5,0,100));return 0;
   case WM_KEYDOWN:
@@ -632,12 +657,12 @@ struct Modern::Impl {
   Advance(GetTickCount(),true);
   const auto& pos=IsRectEmpty(&restored)?saved:restored;
   SetWindowPos(w,nullptr,pos.left,pos.top,layout->Get(L"w"),layout->Get(L"h"),SWP_NOACTIVATE|SWP_NOZORDER);
-  Render();Region();Require(SetTimer(w,modernTimer,20,nullptr)!=0,"modern timer");InvalidateRect(w,nullptr,FALSE);
+  Render();SyncContent(true);Region();Require(SetTimer(w,modernTimer,20,nullptr)!=0,"modern timer");InvalidateRect(w,nullptr,FALSE);
  }
  void Detach()noexcept {
   ready=false;if(!window)return;
   if(IsWindow(window)){
-   KillTimer(window,modernTimer);try{EndMove();}catch(...){}
+   KillTimer(window,modernTimer);try{EndMove();contentRect={};SyncContent(true);}catch(...){}
    if(GetCapture()==window)ReleaseCapture();
    RemoveWindowSubclass(window,Subclass,modernId);
    if(tooltip)DestroyWindow(tooltip);tooltip=nullptr;
@@ -673,7 +698,7 @@ HBITMAP Modern::Preview(){
  {Gdiplus::Graphics graphics(&preview);graphics.Clear(Impl::GColor(background));graphics.DrawImage(impl_->frame.get(),0,0);}
  HBITMAP bitmap{};preview.GetHBITMAP(Impl::GColor(background),&bitmap);return bitmap;
 }
-void Modern::Paint(HWND w,HDC dc,bool child){if(w==impl_->window)impl_->Draw(dc);else Skin::Paint(w,dc,child);}
+void Modern::Paint(HWND w,HDC dc,bool child){if(w==impl_->window)impl_->Draw(dc,child);else Skin::Paint(w,dc,child);}
 bool Modern::Handles(HWND w)const{return (w && w==impl_->window)||Skin::Handles(w);}
 bool Modern::Translate(const MSG& msg){
  if(msg.message==WM_MOUSEWHEEL && impl_->window && !GetCapture()){
@@ -685,26 +710,57 @@ bool Modern::Translate(const MSG& msg){
 HRESULT Modern::Layout(TtpSkinLayout& state,bool restore){
  if(restore){
   if(impl_->window)return E_UNEXPECTED;
-  std::wstring text(state.state,wcsnlen_s(state.state,std::size(state.state))),layoutId;int version{},left{},right{},vis{},scroll{};
+  std::wstring text(state.state,wcsnlen_s(state.state,std::size(state.state))),layoutId;int version{},left{},right{},vis{},scroll{};uint32_t contentMode=1,contentVisual=1;
   const auto separator=text.find(L'|');
   if(!text.empty()){
    if(separator==std::wstring::npos)return E_INVALIDARG;
    std::wistringstream input(text.substr(0,separator));
-   if(!(input>>version>>left>>right>>vis>>scroll) || (version!=1 && version!=2) || left<0 || left>1 || right<0 || right>1 || vis<0 || vis>1 || scroll<0)return E_INVALIDARG;
-   if(version==2 && !(input>>std::quoted(layoutId)))return E_INVALIDARG;
+   if(!(input>>version>>left>>right>>vis>>scroll) || (version<1 || version>3) || left<0 || left>1 || right<0 || right>1 || vis<0 || vis>1 || scroll<0)return E_INVALIDARG;
+   if(version>=2 && !(input>>std::quoted(layoutId)))return E_INVALIDARG;
    if(!layoutId.empty() && std::none_of(impl_->layouts.begin(),impl_->layouts.end(),[&](Node* n){return Lower(n->Id())==Lower(layoutId);}))return E_INVALIDARG;
+   if(version>=3 && (!(input>>contentMode>>contentVisual) || contentMode<1 || contentMode>3 || contentVisual>4))return E_INVALIDARG;
    input>>std::ws;if(!input.eof())return E_INVALIDARG;
   }
   auto fallback=state;wcscpy_s(fallback.state,text.empty()?L"":text.substr(separator+1).c_str());
   auto result=Skin::Layout(fallback,true);if(FAILED(result))return result;
   if(!layoutId.empty())impl_->SwitchLayout(layoutId);
+  impl_->contentMode=contentMode;impl_->contentVisual=contentVisual;
   impl_->restored=state.windows[0];impl_->restoreLeft=left!=0;impl_->restoreRight=right!=0;impl_->restoreVis=vis!=0;impl_->scroll=scroll;return S_OK;
  }
  auto result=Skin::Layout(state,false);if(FAILED(result))return result;
  std::wstring tail=state.state;auto* left=impl_->root->Find(L"LeftDrawerStatus");auto* right=impl_->root->Find(L"RightDrawerStatus");auto* vis=impl_->root->Find(L"vis");
- std::wostringstream payload;payload<<2<<L' '<<(left?left->Get(L"x"):0)<<L' '<<(right?right->Get(L"x"):0)<<L' '<<(vis && vis->visible?1:0)<<L' '<<impl_->scroll<<L' '<<std::quoted(impl_->layout->Id())<<L'|'<<tail;
+ std::wostringstream payload;payload<<3<<L' '<<(left?left->Get(L"x"):0)<<L' '<<(right?right->Get(L"x"):0)<<L' '<<(vis && vis->visible?1:0)<<L' '<<impl_->scroll<<L' '<<std::quoted(impl_->layout->Id())<<L' '<<impl_->contentMode<<L' '<<impl_->contentVisual<<L'|'<<tail;
  if(payload.str().size()>=std::size(state.state))return E_FAIL;wcscpy_s(state.state,payload.str().c_str());
  if(impl_->window)GetWindowRect(impl_->window,&state.windows[0]);else state.windows[0]=impl_->restored;return S_OK;
+}
+bool Modern::ContentState(TtpSkinContent& state,bool apply){
+ if(state.window!=impl_->window)return Skin::ContentState(state,apply);
+ if(state.size<sizeof(state) || !impl_->window)return false;
+ if(apply){
+  if(state.mode<1 || state.mode>3 || state.visual_type>4)return false;
+  SendMessageW(impl_->window,WM_CANCELMODE,0,0);
+  impl_->contentMode=state.mode;impl_->contentVisual=state.visual_type;
+  impl_->SyncContent(true);InvalidateRect(impl_->window,nullptr,FALSE);
+ }
+ return impl_->Content(state);
+}
+HMENU Modern::Menu(HWND window,uint32_t command){
+ if(window!=impl_->window)return Skin::Menu(window,command);
+ if(command){
+  TtpSkinContent c{sizeof(c),window};if(!ContentState(c,false))return nullptr;
+  if(command>=700 && command<703)c.mode=command-699;
+  else if(command>=710 && command<715)c.visual_type=command-710;
+  else if(command==720)impl_->Command(TTP_SKIN_CONTENT_FULLSCREEN,c.mode|(c.visual_type<<8));
+  ContentState(c,true);return nullptr;
+ }
+ HMENU menu=CreatePopupMenu(),effects=CreatePopupMenu();
+ if(!menu || !effects){if(menu)DestroyMenu(menu);if(effects)DestroyMenu(effects);return nullptr;}
+ const wchar_t* modes[]={L"歌词",L"视觉效果",L"歌词与视觉同屏"};
+ const wchar_t* names[]={L"无",L"梦幻",L"频谱分析",L"波形",L"专辑封面"};
+ for(UINT i=0;i<3;++i)AppendMenuW(menu,MF_STRING|(impl_->contentMode==i+1?MF_CHECKED:0),700+i,modes[i]);
+ for(UINT i=0;i<5;++i)AppendMenuW(effects,MF_STRING|(impl_->contentVisual==i?MF_CHECKED:0),710+i,names[i]);
+ AppendMenuW(menu,MF_POPUP,reinterpret_cast<UINT_PTR>(effects),L"视觉效果类型");
+ AppendMenuW(menu,MF_STRING,720,L"全屏显示当前内容");return menu;
 }
 bool Modern::PlaylistDrop(TtpSkinPlaylistDrop& drop){
  if(drop.size<sizeof(drop) || drop.window!=impl_->window)return Skin::PlaylistDrop(drop);

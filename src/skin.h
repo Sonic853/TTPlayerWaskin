@@ -72,8 +72,8 @@ public:
     virtual bool Translate(const MSG& message);
     virtual HRESULT Layout(TtpSkinLayout& state,bool restore);
     virtual bool Handles(HWND window) const;
-    HMENU Menu(HWND window,uint32_t command);
-    bool ContentState(TtpSkinContent& state,bool apply);
+    virtual HMENU Menu(HWND window,uint32_t command);
+    virtual bool ContentState(TtpSkinContent& state,bool apply);
     bool ContentMinimum(HWND window,SIZE& size) const;
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
     virtual bool PlaylistDrop(TtpSkinPlaylistDrop& drop);

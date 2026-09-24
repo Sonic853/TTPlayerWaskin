@@ -20,5 +20,7 @@ public:
     HRESULT Layout(TtpSkinLayout&,bool) override;
     bool Handles(HWND) const override;
     bool PlaylistDrop(TtpSkinPlaylistDrop&) override;
+    HMENU Menu(HWND,uint32_t) override;
+    bool ContentState(TtpSkinContent&,bool) override;
 };
 }
