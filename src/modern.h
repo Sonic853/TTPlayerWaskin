@@ -22,5 +22,6 @@ public:
     bool PlaylistDrop(TtpSkinPlaylistDrop&) override;
     HMENU Menu(HWND,uint32_t) override;
     bool ContentState(TtpSkinContent&,bool) override;
+    bool LyricFont(LOGFONTW&) const override;
 };
 }

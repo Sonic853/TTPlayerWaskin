@@ -96,6 +96,12 @@ bool Skin::ContentMinimum(HWND window,SIZE& size) const {
     size={275,116};return true;
 }
 
+bool Skin::LyricFont(LOGFONTW& font) const {
+    // WSZ playlist text and window lyrics share the exact GDI descriptor.
+    // A WAL's XML owns its fonts; the classic fallback is not its default.
+    return !fallback_only_ && font_ && GetObjectW(font_,sizeof(font),&font)==sizeof(font);
+}
+
 void Skin::VideoContentChanged() {
     CaptureLayout();
     auto& view=views_[3];

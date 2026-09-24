@@ -424,14 +424,15 @@ struct Modern::Impl {
 
  struct Hit {Node* node;RECT bounds;Gdiplus::Bitmap* mask;RECT source{};};std::vector<Hit> hits;std::vector<RECT> regionRects;
  COLORREF Color(const wchar_t* id,COLORREF fallback)const{auto i=colors.find(id);return i==colors.end()?fallback:i->second;}
- static Gdiplus::Color GColor(COLORREF c){return Gdiplus::Color(255,GetRValue(c),GetGValue(c),GetBValue(c));}
+  static Gdiplus::Color GColor(COLORREF c){return Gdiplus::Color(255,GetRValue(c),GetGValue(c),GetBValue(c));}
+  static Gdiplus::Font PlaylistFont(){return Gdiplus::Font(L"Tahoma",11,Gdiplus::FontStyleRegular,Gdiplus::UnitPixel);}
  void Playlist(Gdiplus::Graphics& g,RECT r){
   playlistRect=r;auto state=State();const int rows=std::max(1,int(r.bottom-r.top)/14);
   scroll=std::clamp(scroll,0,std::max(0,int(state.track_count)-rows));
   Gdiplus::SolidBrush bg(GColor(Color(L"wasabi.list.background",RGB(0,0,0))));
   g.FillRectangle(&bg,int(r.left),int(r.top),int(r.right-r.left),int(r.bottom-r.top));
   auto clip=g.Save();g.SetClip(Gdiplus::Rect(r.left,r.top,r.right-r.left,r.bottom-r.top));
-  Gdiplus::Font textFont(L"Tahoma",11,Gdiplus::FontStyleRegular,Gdiplus::UnitPixel);
+   auto textFont=PlaylistFont();
   Gdiplus::StringFormat format;format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
   for(int row=scroll;row<std::min(int(state.track_count),scroll+rows);++row){
    TtpSkinTrack track{};track.size=sizeof(track);if(!host.track || !host.track(host.context,uint32_t(row),&track))continue;
@@ -761,6 +762,13 @@ HMENU Modern::Menu(HWND window,uint32_t command){
  for(UINT i=0;i<5;++i)AppendMenuW(effects,MF_STRING|(impl_->contentVisual==i?MF_CHECKED:0),710+i,names[i]);
  AppendMenuW(menu,MF_POPUP,reinterpret_cast<UINT_PTR>(effects),L"视觉效果类型");
  AppendMenuW(menu,MF_STRING,720,L"全屏显示当前内容");return menu;
+}
+bool Modern::LyricFont(LOGFONTW& font)const{
+ // Derive the host's GDI font from the very same pixel font as the embedded
+ // playlist. XML text/bitmap fonts belong to other skin controls.
+ Gdiplus::Bitmap bitmap(1,1,PixelFormat32bppARGB);Gdiplus::Graphics graphics(&bitmap);
+ auto playlistFont=Impl::PlaylistFont();
+ return playlistFont.GetLogFontW(&graphics,&font)==Gdiplus::Ok;
 }
 bool Modern::PlaylistDrop(TtpSkinPlaylistDrop& drop){
  if(drop.size<sizeof(drop) || drop.window!=impl_->window)return Skin::PlaylistDrop(drop);

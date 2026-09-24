@@ -69,6 +69,9 @@ HMENU WINAPI Menu(void* instance,HWND window,uint32_t command) {try {return inst
 BOOL WINAPI ContentState(void* instance,TtpSkinContent* state,BOOL apply) {try {return instance && state && static_cast<waskin::Skin*>(instance)->ContentState(*state,apply!=FALSE);} catch(...) {return FALSE;}}
 BOOL WINAPI LyricColors(void* instance,HWND window,TtpSkinLyricColors* colors) {return instance && colors && static_cast<waskin::Skin*>(instance)->LyricColors(window,*colors);}
 int32_t WINAPI LyricFontHeight(void* instance) {return instance?-11:0;}
+BOOL WINAPI LyricFont(void* instance,LOGFONTW* font) {
+    return instance && font && static_cast<waskin::Skin*>(instance)->LyricFont(*font);
+}
 BOOL WINAPI ContentMinimum(void* instance,HWND window,SIZE* size) {
     return instance && size && static_cast<waskin::Skin*>(instance)->ContentMinimum(window,*size);
 }
@@ -103,7 +106,7 @@ extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* outpu
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
         L"waskin",waskin::MakiLibrary::Available()?L".wsz;.wal":L".wsz",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight,PlaylistDrop,ContentMinimum,waskin::kBuiltinPackage,
-        L"https://skins.webamp.org/",Check};
+        L"https://skins.webamp.org/",Check,LyricFont};
     std::memcpy(output,&api,size);
     return S_OK;
 }
