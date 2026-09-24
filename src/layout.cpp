@@ -4,7 +4,7 @@
 
 namespace waskin {
 void Skin::CaptureLayout() noexcept {
-    if(binding_ || !IsWindow(views_[0].window)) return;
+    if(binding_ || (!fallback_only_ && !IsWindow(views_[0].window))) return;
     layout_.scroll=std::max(0,views_[1].scroll);
     if(IsIconic(views_[0].window)) return;
     layout_.scale=scale_;

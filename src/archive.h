@@ -9,8 +9,8 @@ using Bytes = std::vector<uint8_t>;
 // In-memory ZIP reader: stored/raw DEFLATE, CRC32, bounded output. No extraction.
 class Archive {
 public:
-    explicit Archive(const wchar_t* path);
-    explicit Archive(Bytes bytes);
+    explicit Archive(const wchar_t* path, bool modern=false);
+    explicit Archive(Bytes bytes, bool modern=false);
     bool Has(const std::string& name) const;
     Bytes Read(const std::string& name) const;
 private:

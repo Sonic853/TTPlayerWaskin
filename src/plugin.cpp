@@ -1,5 +1,7 @@
 #include "skin.h"
 #include "builtin_skin.h"
+#include "modern.h"
+#include "maki_client.h"
 #include <new>
 #include <memory>
 #include <string>
@@ -7,6 +9,14 @@
 #include <cstring>
 
 namespace {
+bool IsModern(const wchar_t* path) {
+    const auto length=wcslen(path);
+    return length>=4 && _wcsicmp(path+length-4,L".wal")==0;
+}
+std::unique_ptr<waskin::Skin> Open(const wchar_t* path,const TtpSkinHost* host) {
+    if(IsModern(path)) return std::make_unique<waskin::Modern>(path,host);
+    return std::make_unique<waskin::Skin>(path,host);
+}
 template<size_t N> void CopyField(wchar_t (&target)[N],const std::wstring& value) {
     const auto count=std::min(value.size(),N-1);
     // Do not cut a non-BMP character in half at an ABI field boundary.
@@ -24,11 +34,13 @@ HRESULT WINAPI Probe(const wchar_t* path,TtpSkinInfo* info) {
     };
     publish();
     try {
-        waskin::Skin validated(path,nullptr);
+        // Listing a WAL must not execute MAKI or require every optional
+        // component. Creation/check perform the full compatibility validation.
+        auto validated=IsModern(path)?std::unique_ptr<waskin::Skin>{}:Open(path,nullptr);
         if(waskin::IsBuiltinPackage(path)) {
             wcscpy_s(result.name,L"<默认皮肤>");
         } else {
-            const auto& metadata=validated.Info();
+            const auto metadata=validated?validated->Info():waskin::Modern::Inspect(path);
             CopyField(result.name,metadata.name);CopyField(result.author,metadata.author);
             CopyField(result.email,metadata.email);CopyField(result.website,metadata.website);
         }
@@ -39,7 +51,7 @@ HRESULT WINAPI Probe(const wchar_t* path,TtpSkinInfo* info) {
 HRESULT WINAPI Create(const wchar_t* path,const TtpSkinHost* host,void** output) {
     if(!path || !output || (host && (host->size<TTP_SKIN_HOST_V1_SIZE || host->version!=TTP_SKIN_ABI))) return E_INVALIDARG;
     *output=nullptr;
-    try {*output=new waskin::Skin(path,host);return S_OK;}
+    try {*output=Open(path,host).release();return S_OK;}
     catch(const std::bad_alloc&) {return E_OUTOFMEMORY;} catch(...) {return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);}
 }
 HRESULT WINAPI Attach(void* instance,const TtpSkinWindows* windows) {
@@ -60,6 +72,24 @@ int32_t WINAPI LyricFontHeight(void* instance) {return instance?-11:0;}
 BOOL WINAPI ContentMinimum(void* instance,HWND window,SIZE* size) {
     return instance && size && static_cast<waskin::Skin*>(instance)->ContentMinimum(window,*size);
 }
+HRESULT WINAPI Check(const wchar_t* path,wchar_t* message,uint32_t count) {
+    if(message && count)message[0]=0;
+    if(!path || (!message && count))return E_INVALIDARG;
+    try {auto validated=Open(path,nullptr);
+        if(IsModern(path)) {
+            const auto notes=static_cast<waskin::Modern*>(validated.get())->Diagnostic();
+            if(!notes.empty()){if(message && count)wcsncpy_s(message,count,notes.c_str(),_TRUNCATE);return S_FALSE;}
+        }
+        return S_OK;
+    }
+    catch(const std::exception& error) {
+        if(message && count) {
+            const char* text=error.what();const int size=MultiByteToWideChar(CP_UTF8,0,text,-1,nullptr,0);
+            if(size>0) {std::wstring wide(size,L'\0');MultiByteToWideChar(CP_UTF8,0,text,-1,wide.data(),size);wcsncpy_s(message,count,wide.c_str(),_TRUNCATE);}
+        }
+        return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+    }catch(...) {return E_FAIL;}
+}
 BOOL WINAPI PlaylistDrop(void* instance,TtpSkinPlaylistDrop* drop) {
     try {return instance && drop && static_cast<waskin::Skin*>(instance)->PlaylistDrop(*drop);} catch(...) {return FALSE;}
 }
@@ -72,8 +102,8 @@ extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* outpu
     if(version!=TTP_SKIN_ABI || !output || output->size<TTP_SKIN_PLUGIN_V1_SIZE) return E_INVALIDARG;
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
-        L"waskin",L".wsz;.wal",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight,PlaylistDrop,ContentMinimum,waskin::kBuiltinPackage,
-        L"https://skins.webamp.org/"};
+        L"waskin",waskin::MakiLibrary::Available()?L".wsz;.wal":L".wsz",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight,PlaylistDrop,ContentMinimum,waskin::kBuiltinPackage,
+        L"https://skins.webamp.org/",Check};
     std::memcpy(output,&api,size);
     return S_OK;
 }

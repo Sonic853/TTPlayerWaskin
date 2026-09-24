@@ -110,7 +110,7 @@ Image::Image(const Bytes& bytes) {
     ReleaseDC(nullptr,screen);
     if(!bitmap) throw std::runtime_error("Cannot create BMP");
 }
-Skin::Skin(const wchar_t* path,const TtpSkinHost* host) {
+Skin::Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only):fallback_only_(fallback_only) {
     if(host) {
         // Old v1 hosts end at command. Never read a partially supplied tail.
         std::memcpy(&host_,host,TTP_SKIN_HOST_V1_SIZE);
@@ -592,6 +592,7 @@ HRESULT Skin::Attach(const TtpSkinWindows& windows) {
     if(layout_.bounds[0].right>layout_.bounds[0].left && layout_.bounds[0].bottom>layout_.bounds[0].top)
         origin=layout_.bounds[0];
     for(int i=0;i<4;++i) {
+        if(i==0 && fallback_only_) continue;
         if(!IsWindow(handles[i])) { if(i==0) {Detach();binding_=false;return E_INVALIDARG;} continue; }
         auto& v=views_[i];v.shaded=layout_.shaded[i];v.seek=-1;v.scroll=i==1?layout_.scroll:0;v.selected=-1;v.external_drop=-1;v.window=handles[i]; GetWindowRect(v.window,&v.saved);
         v.saved_region=CreateRectRgn(0,0,0,0);

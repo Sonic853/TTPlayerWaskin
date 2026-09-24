@@ -2,6 +2,8 @@
 
 > 后续实现已按用户要求改为 AddIn/ttp_waskin.dll，由 DLL 负责解析与绘制。当前行为见 [WSZ_IMPLEMENTATION.md](WSZ_IMPLEMENTATION.md)；本文保留最初的可行性分析。
 
+> 2026-09-24 补充：[WAL 不依赖 Wasabi 的 HeadAMP C++ 验证](WAL_NO_WASABI_HEADAMP.md) 已证明可用独立 XML/MAKI/控件运行时实现指定样本的基本交互。此结论不表示发布 DLL 已支持 WAL，也不表示 MAKI 能独立代替界面运行时。
+
 分析日期：2026-09-18。依据当前 `rebuild` 与同级 `winamp` 目录中的源代码。
 本文是静态代码审查和设计建议；尚未实现、编译或运行 Winamp 皮肤适配器。
 

@@ -11,11 +11,13 @@ endif()
 # One XP-compatible binary serves both hosts. The C ABI never transfers CRT
 # allocations, so the modern host can safely use this DLL's older runtime.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/legacy_windows.cmake")
-add_library(ttp_waskin SHARED src/archive.cpp src/builtin_skin.cpp resources/default_skin.rc src/metadata.cpp src/skin.cpp src/tooltips.cpp src/layout.cpp src/fallback.cpp src/spectrum.cpp src/visual.cpp src/video.cpp src/plugin.cpp src/ttp_waskin.def)
+add_library(ttp_waskin SHARED src/archive.cpp src/builtin_skin.cpp resources/default_skin.rc src/metadata.cpp src/skin.cpp src/tooltips.cpp src/layout.cpp src/fallback.cpp src/spectrum.cpp src/visual.cpp src/video.cpp src/modern.cpp src/plugin.cpp src/ttp_waskin.def)
 target_include_directories(ttp_waskin PUBLIC include PRIVATE src resources)
 target_compile_definitions(ttp_waskin PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0501)
-target_compile_options(ttp_waskin PRIVATE /W4 /permissive- /EHsc /utf-8)
-target_link_libraries(ttp_waskin PRIVATE user32 gdi32 comctl32 ole32 oleaut32)
+# XP LoadLibrary does not initialize compiler-generated static TLS guards.
+# Nontrivial lazy caches use LazyCache; lookup tables have constant initializers.
+target_compile_options(ttp_waskin PRIVATE /W4 /permissive- /EHsc /utf-8 /Zc:threadSafeInit-)
+target_link_libraries(ttp_waskin PRIVATE user32 gdi32 gdiplus comctl32 ole32 oleaut32)
 set_target_properties(ttp_waskin PROPERTIES PREFIX "" OUTPUT_NAME "ttp_waskin")
 install(TARGETS ttp_waskin RUNTIME DESTINATION AddIn)
 install(DIRECTORY DESTINATION Skin/waskin)

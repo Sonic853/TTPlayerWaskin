@@ -153,8 +153,8 @@ Bytes ReadArchiveFile(const wchar_t* path) {
     return bytes;
 }
 }
-Archive::Archive(const wchar_t* path):Archive(ReadArchiveFile(path)) {}
-Archive::Archive(Bytes bytes):bytes_(std::move(bytes)) {
+Archive::Archive(const wchar_t* path,bool modern):Archive(ReadArchiveFile(path),modern) {}
+Archive::Archive(Bytes bytes,bool modern):bytes_(std::move(bytes)) {
     if(bytes_.size()<22 || bytes_.size()>64*1024*1024) Invalid();
     size_t end=bytes_.size()-22; const size_t lower=end>65535?end-65535:0;
     for(;;) {
@@ -188,6 +188,19 @@ Archive::Archive(Bytes bytes):bytes_(std::move(bytes)) {
         offset+=length;
     }
     if(offset!=centralEnd) Invalid();
+    // Modern XML uses full archive-relative paths. Never flatten these.
+    if(modern) {
+        if(!entries_.contains("skin.xml")) {
+            // Winamp also accepts a skin.xml inside the package directory.
+            // Preserve paths below that root, and reject ambiguous roots.
+            for(const auto& [name,entry]:entries_) if(name.ends_with("/skin.xml")) {
+                if(!prefix_.empty()) throw std::runtime_error("multiple WAL skin.xml roots");
+                prefix_=name.substr(0,name.size()-8);
+            }
+            if(prefix_.empty()) throw std::runtime_error("missing WAL skin.xml");
+        }
+        return;
+    }
     // A modern archive can carry classic fallback BMPs: reject its XML first.
     for(const auto& [name,entry]:entries_) {
         (void)entry;

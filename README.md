@@ -3,7 +3,7 @@
 <img width="550" height="475" alt="image" src="https://github.com/user-attachments/assets/62f4d05d-9628-43b7-a0b1-114e4359c375" />
 
 
-TTPlayerRebuild 的可选 Winamp 经典皮肤插件，输出名称为 **`ttp_waskin.dll`**。
+TTPlayerRebuild 的可选 Winamp 皮肤插件，输出名称为 **`ttp_waskin.dll`**。经典 WSZ 可独立使用；HeadAMP WAL 子集可通过独立的 **`ttp_maki.dll`** 启用。
 
 ## 使用
 
@@ -11,8 +11,9 @@ TTPlayerRebuild 的可选 Winamp 经典皮肤插件，输出名称为 **`ttp_was
 2. 将 `ttp_waskin.dll` 放入 **该 EXE 同目录下的 `AddIn`**。普通版与 XP／Win7 版共用完全相同的 DLL。
 3. 启动后可直接选择 Winamp 列表里的 `<默认皮肤>`。其它经典 `.wsz` 放入该运行目录的 **`Skin/waskin`**，从皮肤菜单或选项中的皮肤页选择。此前放在 `Skin` 或 `Skin/new` 的 Winamp 包需要移入此目录。
 4. 也可以将 `.wsz` 拖入主窗口安装，或通过命令行打开 `.wsz`，程序会先复制至 `Skin/waskin` 再加载。
+5. 使用 HeadAMP WAL 时，将独立 `makivm` 工程生成的 `ttp_maki.dll` 放在同一 `AddIn` 目录，再把 WAL 放入 `Skin/waskin` 并重启。缺少或无法加载 VM 时不列出 WAL；WSZ 不受影响。
 
-选项 → 皮肤：检测到有效 Plugin Skin 接口后，顶部显示“原生”和各 DLL 定义的标签，打开时默认选中当前使用的插件。右键菜单的皮肤分组也使用同一名称。本 DLL 声明名称 **“Winamp”**、子目录 **`waskin`**、后缀 **`.wsz;.wal`**，宿主因此读取 `Skin/waskin` 直属目录。列表顶部显示 DLL 内置的 **`<默认皮肤>`**（`base-2.91.wsz`）；目录为空或不存在时也可以选择和预览，不能删除。没有可用插件时不显示标签。
+选项 → 皮肤：检测到有效 Plugin Skin 接口后，顶部显示“原生”和各 DLL 定义的标签，打开时默认选中当前使用的插件。右键菜单的皮肤分组也使用同一名称。本 DLL 声明名称 **“Winamp”**、子目录 **`waskin`**、后缀 **`.wsz`**（VM 可用时增加 **`.wal`**），宿主因此读取 `Skin/waskin` 直属目录。列表顶部显示 DLL 内置的 **`<默认皮肤>`**（`base-2.91.wsz`）；目录为空或不存在时也可以选择和预览，不能删除。没有可用插件时不显示标签。
 
 其它 WSZ 缺少主窗口、均衡器、播放列表或视频窗口的位图时，DLL 使用内置默认皮肤的对应资源补齐。已有的有效图集仍按原图绘制，包括作者刻意裁短的图集；ZIP 损坏或没有任何有效经典位图的包仍会被拒绝。详见 [内置默认皮肤与资源回退](docs/BUILTIN_DEFAULT_SKIN.md)。
 
@@ -26,7 +27,7 @@ TTPlayerRebuild 的可选 Winamp 经典皮肤插件，输出名称为 **`ttp_was
 
 原生选择保存为 `Skin/PackageName`，插件选择单独保存为 `Skin/CustomPackageName`。未接管的窗口使用已选原生皮肤；应用原生皮肤会清空插件选择。**不读取或迁移旧的 `WinampPackageName`，也不从旧的合并字段恢复插件选择。** 配置示例见 [皮肤选择配置](docs/SKIN_SELECTION.md)。
 
-当前版本实现的是经典 WSZ。**Modern / Bento 的 XML、Wasabi、MAKI 运行时尚未实现，包含现代 `skin.xml` 的包会被拒绝。** 不会将现代皮肤中的后备 `main.bmp` 当作完整现代皮肤加载。
+当前支持经典 WSZ，以及通过独立 MAKI VM 运行的 **HeadAMP 所需 WAL 子集**。不使用 Wasabi，尚不支持任意 Modern / Bento 皮肤。VM 可用时声明 `.wsz;.wal`，否则只声明 `.wsz`；每份 WAL 还需通过控件与脚本检查。详见 [WAL 运行时和支持范围](docs/WAL_RUNTIME.md)。两工程分别构建，waskin 的单仓库 Action 仍只打包皮肤 DLL，VM 由独立工程提供。
 
 ## 实现边界
 

@@ -61,24 +61,25 @@ Image MakeFallback(const char* name,int width,int height);
 HCURSOR ReadCursor(const Bytes& bytes);
 class Skin {
 public:
-    Skin(const wchar_t* path,const TtpSkinHost* host);
-    ~Skin();
-    const Metadata& Info() const {return metadata_;}
-    HRESULT Attach(const TtpSkinWindows& windows);
-    void Detach() noexcept;
-    HBITMAP Preview();
-    void Paint(HWND window,HDC dc,bool child_background=false);
-    void Shade();
-    bool Translate(const MSG& message);
-    HRESULT Layout(TtpSkinLayout& state,bool restore);
-    bool Handles(HWND window) const;
+    Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only=false);
+    virtual ~Skin();
+    virtual const Metadata& Info() const {return metadata_;}
+    virtual HRESULT Attach(const TtpSkinWindows& windows);
+    virtual void Detach() noexcept;
+    virtual HBITMAP Preview();
+    virtual void Paint(HWND window,HDC dc,bool child_background=false);
+    virtual void Shade();
+    virtual bool Translate(const MSG& message);
+    virtual HRESULT Layout(TtpSkinLayout& state,bool restore);
+    virtual bool Handles(HWND window) const;
     HMENU Menu(HWND window,uint32_t command);
     bool ContentState(TtpSkinContent& state,bool apply);
     bool ContentMinimum(HWND window,SIZE& size) const;
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
-    bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
+    virtual bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
+    bool fallback_only_{};
     Metadata metadata_;
     struct SavedLayout {
         std::array<RECT,4> bounds{};
