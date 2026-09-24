@@ -75,7 +75,7 @@ struct Modern::Impl {
  std::map<std::wstring,Png> images;std::map<std::wstring,int> privateInts;std::map<std::wstring,COLORREF> colors;
  size_t depth{},instantiateDepth{},imageBytes{};int observedVolume{-1};int playback{},scroll{},selected{-1},drop{-1};
  HWND window{},tooltip{};std::wstring tipText;Node *hover{},*pressed{};POINT down{};
- bool ready{},completed{},fault{},moving{},rowDragging{},selectionPending{};RECT saved{},restored{},playlistRect{};HRGN savedRegion{};
+ bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
  std::vector<std::pair<HWND,bool>> children;std::unique_ptr<Gdiplus::Bitmap> frame;
  bool restoreLeft{},restoreRight{},restoreVis{};
  explicit Impl(const wchar_t* path,const TtpSkinHost* h):archive(path,true),document(archive,true) {
@@ -491,6 +491,9 @@ struct Modern::Impl {
      if(n->attrs[L"param"]==L"guid:pl")Playlist(g,r);else Visual(g,r,n->kind==L"vis");
      if(enabled && !n->Get(L"ghost"))hits.push_back({n,r,nullptr});
     }
+   }else if(n->kind==L"layer" && n->attrs.contains(L"move") && enabled && !n->Get(L"ghost") && !n->locked && !IsRectEmpty(&r)) {
+    // Skin title/mouse-trap layers may intentionally have no bitmap.
+    hits.push_back({n,r,nullptr});
    }
    for(auto& child:n->children)draw(child.get(),r,alpha,enabled);
   };draw(layout,{0,0,layout->Get(L"w"),layout->Get(L"h")},255,true);
@@ -516,7 +519,25 @@ struct Modern::Impl {
   if(handle){if(SetWindowRgn(window,handle,FALSE))regionRects=std::move(spans);else DeleteObject(handle);}
  }
  void Draw(HDC dc){Render();Gdiplus::Graphics g(dc);g.DrawImage(frame.get(),Gdiplus::Rect(0,0,frame->GetWidth(),frame->GetHeight()),0,0,frame->GetWidth(),frame->GetHeight(),Gdiplus::UnitPixel);}
- void Drag(uint32_t phase,POINT p){if(host.drag){TtpSkinDrag d{sizeof(d),phase,window,p,TTP_SKIN_DRAG_WINDOW,{}};host.drag(host.context,&d);}}
+ bool Drag(uint32_t phase,POINT p){if(!host.drag)return false;TtpSkinDrag d{sizeof(d),phase,window,p,TTP_SKIN_DRAG_WINDOW,{}};return host.drag(host.context,&d)!=FALSE;}
+ void BeginMove(POINT p){
+  dragAnchor=p;ClientToScreen(window,&dragAnchor);GetWindowRect(window,&dragOrigin);
+  // The host captures synchronously. Pre-capturing here makes its SetCapture
+  // reenter WM_CAPTURECHANGED and cancel the same gesture before it begins.
+  hostMoving=Drag(TTP_SKIN_DRAG_BEGIN,p);
+  if(!hostMoving && GetCapture()!=window)SetCapture(window);
+  moving=GetCapture()==window;
+ }
+ void Move(POINT p){
+  if(hostMoving){Drag(TTP_SKIN_DRAG_MOVE,p);return;}
+  ClientToScreen(window,&p);
+  SetWindowPos(window,nullptr,dragOrigin.left+p.x-dragAnchor.x,dragOrigin.top+p.y-dragAnchor.y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
+ }
+ void EndMove(POINT p={}){
+  const bool delegated=hostMoving;moving=hostMoving=false;
+  // Clear before calling the host: ReleaseCapture sends WM_CAPTURECHANGED.
+  if(delegated)Drag(TTP_SKIN_DRAG_END,p);
+ }
  int Row(POINT p)const{const int row=scroll+int(p.y-playlistRect.top)/14;return PtInRect(&playlistRect,p) && row>=0 && row<int(StateConst().track_count)?row:-1;}
  TtpSkinState StateConst()const{TtpSkinState s{};s.size=sizeof(s);if(host.query)host.query(host.context,&s);return s;}
  void Select(int row,WPARAM keys){if(row<0)return;selected=row;Command(keys&MK_SHIFT?(keys&MK_CONTROL?TTP_SKIN_EXTEND_TOGGLE_ROW:TTP_SKIN_EXTEND_ROW):(keys&MK_CONTROL?TTP_SKIN_TOGGLE_ROW:TTP_SKIN_SELECT_ROW),row);}
@@ -549,25 +570,29 @@ struct Modern::Impl {
   case WM_TIMER:if(wp==modernTimer){if(!fault){Advance(GetTickCount());Render();Region();InvalidateRect(window,nullptr,FALSE);}return 0;}break;
   case WM_LBUTTONDOWN:
    SetFocus(window);pressed=HitTest(p);down=p;rowDragging=false;selectionPending=false;
-   if(pressed){SetCapture(window);if(MouseEvent(pressed,L"onLeftButtonDown",p)){InvalidateRect(window,nullptr,FALSE);return 0;}}
+   if(pressed && MouseEvent(pressed,L"onLeftButtonDown",p)){if(GetCapture()!=window)SetCapture(window);InvalidateRect(window,nullptr,FALSE);return 0;}
+   if((!pressed || (!IsButton(pressed) && pressed->kind!=L"slider" && pressed->attrs[L"param"]!=L"guid:pl" && pressed->Get(L"move",1))) && layout->Get(L"move",1)) {
+    BeginMove(p);InvalidateRect(window,nullptr,FALSE);return 0;
+   }
+   if(pressed && GetCapture()!=window)SetCapture(window);
    if(pressed && pressed->attrs[L"param"]==L"guid:pl"){int row=Row(p);
     selectionPending=row>=0 && host.selection && (host.selection(host.context,row)&1) && !(wp&(MK_CONTROL|MK_SHIFT));
     if(!selectionPending)Select(row,wp);}
    else if(pressed && pressed->kind==L"slider")Slide(pressed,p,false);
    else if(IsButton(pressed)){}
-   else if(!pressed || pressed->Get(L"move",1)) {moving=true;Drag(TTP_SKIN_DRAG_BEGIN,p);}
    InvalidateRect(window,nullptr,FALSE);return 0;
   case WM_MOUSEMOVE:
-   hover=HitTest(p);if(MouseEvent(pressed?pressed:hover,L"onMouseMove",p)){InvalidateRect(window,nullptr,FALSE);return 0;}
-   if(moving)Drag(TTP_SKIN_DRAG_MOVE,p);
-   else if(pressed && pressed->kind==L"slider")Slide(pressed,p,false);
+   hover=HitTest(p);{const bool consumed=MouseEvent(pressed?pressed:hover,L"onMouseMove",p);
+   if(moving){if(GetCapture()==window)Move(p);else EndMove(p);InvalidateRect(window,nullptr,FALSE);return 0;}
+   if(consumed){InvalidateRect(window,nullptr,FALSE);return 0;}}
+   if(pressed && pressed->kind==L"slider")Slide(pressed,p,false);
    else if(pressed && pressed->attrs[L"param"]==L"guid:pl" && !rowDragging &&
        (std::abs(p.x-down.x)>=GetSystemMetrics(SM_CXDRAG) || std::abs(p.y-down.y)>=GetSystemMetrics(SM_CYDRAG))){
     rowDragging=true;pressed=nullptr;if(GetCapture()==window)ReleaseCapture();Command(TTP_SKIN_DRAG_SELECTION,1);
    }else if(!pressed)Tip(p);
    InvalidateRect(window,nullptr,FALSE);return 0;
   case WM_LBUTTONUP:{
-   Node* n=pressed;const bool consumed=MouseEvent(n,L"onLeftButtonUp",p);pressed=nullptr;if(moving){Drag(TTP_SKIN_DRAG_END,p);moving=false;}
+   Node* n=pressed;const bool consumed=MouseEvent(n,L"onLeftButtonUp",p);pressed=nullptr;EndMove(p);
    if(GetCapture()==window)ReleaseCapture();
    if(consumed){InvalidateRect(window,nullptr,FALSE);return 0;}
    if(n && n->kind==L"slider")Slide(n,p,true);
@@ -584,7 +609,7 @@ struct Modern::Impl {
    if(wp==VK_RETURN && selected>=0){Command(TTP_SKIN_PLAY_ROW,selected);return 0;}
    if(wp=='A' && (GetKeyState(VK_CONTROL)&0x8000)){Command(TTP_SKIN_SELECT_ALL);return 0;}
    break;
-  case WM_CAPTURECHANGED:case WM_CANCELMODE:pressed=nullptr;if(moving){Drag(TTP_SKIN_DRAG_END,p);moving=false;}return 0;
+  case WM_CAPTURECHANGED:case WM_CANCELMODE:pressed=nullptr;rowDragging=selectionPending=false;EndMove();if(message==WM_CANCELMODE && GetCapture()==window)ReleaseCapture();return 0;
   case WM_SETCURSOR:if(LOWORD(lp)==HTCLIENT){SetCursor(LoadCursorW(nullptr,IDC_ARROW));return TRUE;}break;
   case WM_GETMINMAXINFO:{auto* info=reinterpret_cast<MINMAXINFO*>(lp);info->ptMinTrackSize=info->ptMaxTrackSize={layout->Get(L"w"),layout->Get(L"h")};return 0;}
   }
@@ -612,7 +637,7 @@ struct Modern::Impl {
  void Detach()noexcept {
   ready=false;if(!window)return;
   if(IsWindow(window)){
-   KillTimer(window,modernTimer);if(moving){try{Drag(TTP_SKIN_DRAG_END,{});}catch(...){}moving=false;}
+   KillTimer(window,modernTimer);try{EndMove();}catch(...){}
    if(GetCapture()==window)ReleaseCapture();
    RemoveWindowSubclass(window,Subclass,modernId);
    if(tooltip)DestroyWindow(tooltip);tooltip=nullptr;
