@@ -1,4 +1,5 @@
 #include "skin.h"
+#include "host_interaction.h"
 #include "builtin_skin.h"
 #include <windowsx.h>
 #include <algorithm>
@@ -121,7 +122,8 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only):fallb
         if(host->size>=offsetof(TtpSkinHost,spectrum)) host_.resize=host->resize;
         if(host->size>=offsetof(TtpSkinHost,content)) host_.spectrum=host->spectrum;
         if(host->size>=offsetof(TtpSkinHost,content_input)) host_.content=host->content;
-        if(host->size>=sizeof(TtpSkinHost)) host_.content_input=host->content_input;
+        if(host->size>=offsetof(TtpSkinHost,option)) host_.content_input=host->content_input;
+        if(host->size>=sizeof(TtpSkinHost)) host_.option=host->option;
     }
     const auto& builtin=BuiltinArchive();
     std::optional<Archive> package;
@@ -368,7 +370,9 @@ void Skin::DrawMain(View& view,HDC dc,const TtpSkinState& s) {
     Blit(dc,"titlebar.bmp",10,22,8,43,304,0);
     Blit(dc,"monoster.bmp",212,41,28,12,29,s.channels==1?0:12);
     Blit(dc,"monoster.bmp",239,41,29,12,0,s.channels>=2?0:12);
-    if(ticks_<feedback_until_) {
+    const auto status=HostStatus(host_);
+    if(!status.empty()) Title(dc,{111,27,265,33},status);
+    else if(ticks_<feedback_until_) {
         TextBackground(dc,{111,27,265,33},true);
         Text(dc,{111,27,265,33},feedback_,text_color_,true);
     } else Title(dc,{111,27,265,33},s.title);
@@ -616,6 +620,20 @@ HRESULT Skin::Attach(const TtpSkinWindows& windows) {
 bool Skin::Handles(HWND window) const {
     return window && std::any_of(views_.begin(),views_.end(),[window](const View& view){return view.window==window;});
 }
+bool Skin::VolumeTracking() const {
+    return std::any_of(views_.begin(),views_.end(),[](const View& v){
+        return v.window && v.pressed==hitVolume && GetCapture()==v.window;
+    });
+}
+bool Skin::PlaylistReveal(uint32_t row,int32_t caret) {
+    auto& v=views_[1];if(!v.window || row>INT_MAX || row>=State().track_count)return false;
+    RECT bounds{};GetClientRect(v.window,&bounds);
+    const int rows=std::max(1,((v.shaded?v.expanded_height:int(bounds.bottom))-60)/row_height_);
+    v.selected=caret;
+    if(int(row)<v.scroll)v.scroll=int(row);
+    else if(int(row)>=v.scroll+rows)v.scroll=int(row)-rows+1;
+    HideTip(v);InvalidateRect(v.window,nullptr,FALSE);return true;
+}
 bool Skin::PlaylistDrop(TtpSkinPlaylistDrop& drop) {
     auto& view=views_[1];
     if(drop.size<sizeof(drop) || !view.window || drop.window!=view.window || drop.phase>TTP_SKIN_DROP_LEAVE) return false;
@@ -820,7 +838,8 @@ void Skin::BeginTrack(View& v,int hit,POINT p) {
 void Skin::Track(View& v,int hit,POINT p) {
     if(hit==hitVolume) {
         const int value=std::clamp((int(p.x)-(v.shaded?61:107)-v.grab)*100/(v.shaded?94:51),0,100);
-        Command(TTP_SKIN_VOLUME,value);Feedback(L"Volume: "+std::to_wstring(value)+L"%");
+        Command(TTP_SKIN_VOLUME,value);
+        if(!NativeVolume(host_))Feedback(L"Volume: "+std::to_wstring(value)+L"%");
     } else if(hit==hitBalance) {
         int value=std::clamp((int(p.x)-(v.shaded?164:177)-v.grab)*200/(v.shaded?39:24)-100,-100,100);
         if(std::abs(value)<10) value=0;Command(TTP_SKIN_BALANCE,value);Feedback(L"Balance: "+std::to_wstring(value));
@@ -957,7 +976,12 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         }
         return 1;
     case WM_NCHITTEST: return HTCLIENT;
-    case WM_SIZE: HideTip(v);if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);} return 0;
+    case WM_SIZE:
+        HideTip(v);if(wp!=SIZE_MINIMIZED) {HideChildren(v);Region(v);InvalidateRect(v.window,nullptr,FALSE);}
+        // Main WM_SIZE also drives tray state, desktop lyric restoration and
+        // taskbar previews. Only auxiliary native layouts are provider-owned.
+        if(v.kind==0)break;
+        return 0;
     case WM_TIMER:
         if(wp==timerId) { if(v.kind==0) {++ticks_;UpdateStatistics();} RefreshRowTip(v);HideChildren(v);InvalidateRect(v.window,nullptr,FALSE);return 0; } break;
     case WM_ACTIVATE: if(LOWORD(wp)==WA_INACTIVE) HideTip(v);InvalidateRect(v.window,nullptr,FALSE);break;
@@ -1059,6 +1083,7 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         if(GetCapture()==v.window && Sliding(hit)) {Track(v,hit,point);if(hit==hitSeek && v.seek>=0) Command(TTP_SKIN_SEEK,v.seek);}
         const bool resize=v.resizing && !v.host_drag;
         v.pressed=0;v.seek=-1;
+        if(hit==hitVolume)EndVolume(host_);
         const bool moving=v.dragging||v.resizing;EndDrag(v);
         if(GetCapture()==v.window) ReleaseCapture();
         if(resize && v.kind==1) {
@@ -1073,13 +1098,14 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     case WM_SHOWWINDOW: if(!wp) HideTip(v);break;
     case WM_CAPTURECHANGED: case WM_CANCELMODE:
         HideTip(v);
+        if(v.pressed==hitVolume)EndVolume(host_);
         v.pressed=0;v.seek=-1;v.row_drag=false;v.selection_pending=false;v.drop=-1;EndDrag(v);
         if(message==WM_CANCELMODE && GetCapture()==v.window) ReleaseCapture();
         InvalidateRect(v.window,nullptr,FALSE);return 0;
     case WM_MOUSEWHEEL:
         HideTip(v);
         if(v.kind==1) {v.wheel+=GET_WHEEL_DELTA_WPARAM(wp);v.scroll=std::max(0,v.scroll-(v.wheel/WHEEL_DELTA)*3);v.wheel%=WHEEL_DELTA;InvalidateRect(v.window,nullptr,FALSE);}
-        else Command(TTP_SKIN_VOLUME,std::clamp(State().volume+GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*5,0,100));
+        else VolumeWheel(host_,GET_WHEEL_DELTA_WPARAM(wp),State().volume);
         return 0;
     case WM_KEYDOWN:
         HideTip(v);

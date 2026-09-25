@@ -77,6 +77,8 @@ public:
     bool ContentMinimum(HWND window,SIZE& size) const;
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
     virtual bool LyricFont(LOGFONTW& font) const;
+    virtual bool VolumeTracking() const;
+    virtual bool PlaylistReveal(uint32_t row,int32_t caret);
     virtual bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:

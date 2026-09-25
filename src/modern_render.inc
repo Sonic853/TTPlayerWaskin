@@ -9,8 +9,12 @@ static std::wstring Time(int64_t ms) {
 }
 std::wstring TextValue(Node* n) {
  if(n->attrs.contains(L"alternatetext") && !n->attrs[L"alternatetext"].empty())return n->attrs[L"alternatetext"];
+ const auto display=Lower(n->attrs[L"display"]);
+ if(display==L"songname" || display==L"songtitle" || display==L"songinfo") {
+  const auto status=HostStatus(host);if(!status.empty())return status;
+ }
  if(n->attrs.contains(L"text"))return n->attrs[L"text"];
- const auto display=Lower(n->attrs[L"display"]);auto state=State();
+ auto state=State();
  if(display==L"time" || display==L"timeelapsed")return Time(state.position_ms);
  if(display==L"timeremaining")return Time(state.position_ms-state.duration_ms);
  if(display==L"songname" || display==L"songtitle")return std::wstring(state.title)+(n->Get(L"showlen") && state.duration_ms>0?L" ("+Time(state.duration_ms)+L")":L"");
@@ -72,7 +76,8 @@ void Text(Gdiplus::Graphics& g,Node* n,RECT r,int alpha) {
  const auto savedText=g.Save();g.SetClip(Gdiplus::Rect(r.left,r.top,r.right-r.left,r.bottom-r.top),Gdiplus::CombineModeIntersect);
  const auto id=document.Alias(n->attrs[L"font"]);const auto resource=document.fonts.find(id);
  const auto align=Lower(n->attrs[L"align"]);
- if(resource!=document.fonts.end() && resource->second->kind==L"bitmapfont") {
+ const bool bitmapFont=resource!=document.fonts.end() && resource->second->kind==L"bitmapfont";
+ if(bitmapFont && std::all_of(text.begin(),text.end(),[](wchar_t c){return c>=32 && c<127;})) {
   auto* font=resource->second;auto* bitmap=Bitmap(id);const int cw=_wtoi(font->attrs[L"charwidth"].c_str()),ch=_wtoi(font->attrs[L"charheight"].c_str());
   Require(cw>0 && ch>0 && cw<=256 && ch<=256,"bitmap font metrics");const int step=std::max(1,cw+_wtoi(font->attrs[L"hspacing"].c_str()));
   int x=r.left;if(align==L"right")x=r.right-int(text.size())*step;else if(align==L"center")x+=(r.right-r.left-int(text.size())*step)/2;
@@ -87,7 +92,7 @@ void Text(Gdiplus::Graphics& g,Node* n,RECT r,int alpha) {
    x+=step;
   }
  } else {
-  Gdiplus::FontCollection* collection{};const auto family=FontFamily(n,collection);
+  Gdiplus::FontCollection* collection{};const auto family=bitmapFont?std::wstring(L"Tahoma"):FontFamily(n,collection);
   const int style=(n->Get(L"bold")?Gdiplus::FontStyleBold:0)|(n->Get(L"italic")?Gdiplus::FontStyleItalic:0);
   Gdiplus::Font font(family.c_str(),float(std::clamp(n->Get(L"fontsize",12),1,256)),style,Gdiplus::UnitPixel,collection);
   Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());format.SetFormatFlags(n->Get(L"wrap")?0:Gdiplus::StringFormatFlagsNoWrap);

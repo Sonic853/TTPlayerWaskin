@@ -1,4 +1,5 @@
 #include "modern.h"
+#include "host_interaction.h"
 #include "modern_objects.h"
 #include "modern_document.h"
 #include "modern_capabilities.h"
@@ -76,7 +77,8 @@ struct Modern::Impl {
  std::map<std::wstring,Png> images;std::map<std::wstring,int> privateInts;std::map<std::wstring,COLORREF> colors;
  size_t depth{},instantiateDepth{},imageBytes{};int observedVolume{-1};int playback{},scroll{},selected{-1},drop{-1};
  HWND window{},tooltip{};std::wstring tipText;Node *hover{},*pressed{};POINT down{};
- bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
+ bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{},volumeGesture{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
+ int revealRow{-1};
  std::vector<std::pair<HWND,bool>> children;std::unique_ptr<Gdiplus::Bitmap> frame;
  bool restoreLeft{},restoreRight{},restoreVis{};
  RECT contentRect{},notifiedContent{};
@@ -305,7 +307,7 @@ struct Modern::Impl {
         else if(method==L"settargetx")n->target=int(std::clamp(Number(args.at(0)),-8192.0,8192.0));
         else if(method==L"gototarget"){n->origin=n->Get(L"x");n->animationStarted=false;n->animating=true;}
         else if(method==L"leftclick")Click(n);
-        else if(method==L"setvolume")Command(TTP_SKIN_VOLUME,std::clamp(MulDiv(int(Number(args.at(0))),100,255),0,100));
+        else if(method==L"setvolume"){if(pressed)volumeGesture=true;Command(TTP_SKIN_VOLUME,std::clamp(MulDiv(int(Number(args.at(0))),100,255),0,100));}
         else if(method==L"seteqband")Command(TTP_SKIN_EQ_VALUE+1+std::clamp(int(Number(args.at(0))),0,9),std::clamp(MulDiv(int(Number(args.at(1))),12,127),-12,12));
         else if(method==L"setposition")Slider(n,int(std::clamp(Number(args.at(0)),-65535.0,65535.0))*(Lower(n->attrs[L"action"])==L"seek"?256:1),true);
         else throw std::runtime_error("unsupported host implementation");return 0.0;}
@@ -428,6 +430,7 @@ struct Modern::Impl {
   static Gdiplus::Font PlaylistFont(){return Gdiplus::Font(L"Tahoma",11,Gdiplus::FontStyleRegular,Gdiplus::UnitPixel);}
  void Playlist(Gdiplus::Graphics& g,RECT r){
   playlistRect=r;auto state=State();const int rows=std::max(1,int(r.bottom-r.top)/14);
+  if(revealRow>=0){if(revealRow<scroll)scroll=revealRow;else if(revealRow>=scroll+rows)scroll=revealRow-rows+1;revealRow=-1;}
   scroll=std::clamp(scroll,0,std::max(0,int(state.track_count)-rows));
   Gdiplus::SolidBrush bg(GColor(Color(L"wasabi.list.background",RGB(0,0,0))));
   g.FillRectangle(&bg,int(r.left),int(r.top),int(r.right-r.left),int(r.bottom-r.top));
@@ -596,6 +599,7 @@ struct Modern::Impl {
   case WM_TIMER:if(wp==modernTimer){if(!fault){Advance(GetTickCount());Render();SyncContent();Region();InvalidateRect(window,nullptr,FALSE);}return 0;}break;
   case WM_LBUTTONDOWN:
    SetFocus(window);pressed=HitTest(p);down=p;rowDragging=false;selectionPending=false;
+   volumeGesture=pressed && Lower(pressed->attrs[L"action"])==L"volume";
    if(pressed && MouseEvent(pressed,L"onLeftButtonDown",p)){if(GetCapture()!=window)SetCapture(window);InvalidateRect(window,nullptr,FALSE);return 0;}
    if((!pressed || (!IsButton(pressed) && pressed->kind!=L"slider" && pressed->attrs[L"param"]!=L"guid:pl" && pressed->Get(L"move",1))) && layout->Get(L"move",1)) {
     BeginMove(p);InvalidateRect(window,nullptr,FALSE);return 0;
@@ -618,24 +622,27 @@ struct Modern::Impl {
    }else if(!pressed)Tip(p);
    InvalidateRect(window,nullptr,FALSE);return 0;
   case WM_LBUTTONUP:{
-   Node* n=pressed;const bool consumed=MouseEvent(n,L"onLeftButtonUp",p);pressed=nullptr;EndMove(p);
+   Node* n=pressed;const bool consumed=MouseEvent(n,L"onLeftButtonUp",p);const bool volume=std::exchange(volumeGesture,false);pressed=nullptr;EndMove(p);
    if(GetCapture()==window)ReleaseCapture();
-   if(consumed){InvalidateRect(window,nullptr,FALSE);return 0;}
+   if(consumed){if(volume)EndVolume(host);InvalidateRect(window,nullptr,FALSE);return 0;}
    if(n && n->kind==L"slider")Slide(n,p,true);
    else if(n && n==HitTest(p) && IsButton(n))Click(n);
    else if(n && n->attrs[L"param"]==L"guid:pl" && !rowDragging && selectionPending)Select(Row(p),wp);
+   if(volume)EndVolume(host);
    InvalidateRect(window,nullptr,FALSE);return 0;}
   case WM_LBUTTONDBLCLK:if(auto* n=HitTest(p);n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0)Command(TTP_SKIN_PLAY_ROW,row);}return 0;
   case WM_RBUTTONUP:{auto* n=HitTest(p);if(n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0 && !(host.selection && (host.selection(host.context,row)&1)))Select(row,0);Command(TTP_SKIN_LIST_MENU,row);}
    else Command(n && n->kind==L"vis"?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);return 0;}
   case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PtInRect(&playlistRect,p)){scroll=std::max(0,scroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3);InvalidateRect(window,nullptr,FALSE);}
-   else Command(TTP_SKIN_VOLUME,std::clamp(State().volume+GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*5,0,100));return 0;
+   else VolumeWheel(host,GET_WHEEL_DELTA_WPARAM(wp),State().volume);return 0;
   case WM_KEYDOWN:
    if(wp==VK_DELETE && selected>=0){Command(TTP_SKIN_DELETE_SELECTED);return 0;}
    if(wp==VK_RETURN && selected>=0){Command(TTP_SKIN_PLAY_ROW,selected);return 0;}
    if(wp=='A' && (GetKeyState(VK_CONTROL)&0x8000)){Command(TTP_SKIN_SELECT_ALL);return 0;}
    break;
-  case WM_CAPTURECHANGED:case WM_CANCELMODE:pressed=nullptr;rowDragging=selectionPending=false;EndMove();if(message==WM_CANCELMODE && GetCapture()==window)ReleaseCapture();return 0;
+  case WM_CAPTURECHANGED:case WM_CANCELMODE:
+   if(std::exchange(volumeGesture,false) && ready)EndVolume(host);
+   pressed=nullptr;rowDragging=selectionPending=false;EndMove();if(message==WM_CANCELMODE && GetCapture()==window)ReleaseCapture();return 0;
   case WM_SETCURSOR:if(LOWORD(lp)==HTCLIENT){SetCursor(LoadCursorW(nullptr,IDC_ARROW));return TRUE;}break;
   case WM_GETMINMAXINFO:{auto* info=reinterpret_cast<MINMAXINFO*>(lp);info->ptMinTrackSize=info->ptMaxTrackSize={layout->Get(L"w"),layout->Get(L"h")};return 0;}
   }
@@ -702,7 +709,9 @@ HBITMAP Modern::Preview(){
 void Modern::Paint(HWND w,HDC dc,bool child){if(w==impl_->window)impl_->Draw(dc,child);else Skin::Paint(w,dc,child);}
 bool Modern::Handles(HWND w)const{return (w && w==impl_->window)||Skin::Handles(w);}
 bool Modern::Translate(const MSG& msg){
- if(msg.message==WM_MOUSEWHEEL && impl_->window && !GetCapture()){
+ if(msg.message==WM_MOUSEWHEEL && impl_->window && !GetCapture() &&
+    IsWindowEnabled(impl_->window) && IsWindowVisible(impl_->window) &&
+    GetWindowThreadProcessId(msg.hwnd,nullptr)==GetCurrentThreadId()){
   POINT p{GET_X_LPARAM(msg.lParam),GET_Y_LPARAM(msg.lParam)};
   if(WindowFromPoint(p)==impl_->window){SendMessageW(impl_->window,msg.message,msg.wParam,msg.lParam);return true;}
  }
@@ -769,6 +778,16 @@ bool Modern::LyricFont(LOGFONTW& font)const{
  Gdiplus::Bitmap bitmap(1,1,PixelFormat32bppARGB);Gdiplus::Graphics graphics(&bitmap);
  auto playlistFont=Impl::PlaylistFont();
  return playlistFont.GetLogFontW(&graphics,&font)==Gdiplus::Ok;
+}
+bool Modern::VolumeTracking()const{
+ return (impl_->window && GetCapture()==impl_->window && impl_->volumeGesture) || Skin::VolumeTracking();
+}
+bool Modern::PlaylistReveal(uint32_t row,int32_t caret){
+ const bool classic=Skin::PlaylistReveal(row,caret);
+ if(row>=impl_->State().track_count || row>INT_MAX)return classic;
+ impl_->selected=caret;impl_->revealRow=int(row);
+ if(impl_->window)InvalidateRect(impl_->window,nullptr,FALSE);
+ return true;
 }
 bool Modern::PlaylistDrop(TtpSkinPlaylistDrop& drop){
  if(drop.size<sizeof(drop) || drop.window!=impl_->window)return Skin::PlaylistDrop(drop);

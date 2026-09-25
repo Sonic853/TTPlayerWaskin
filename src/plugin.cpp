@@ -72,6 +72,10 @@ int32_t WINAPI LyricFontHeight(void* instance) {return instance?-11:0;}
 BOOL WINAPI LyricFont(void* instance,LOGFONTW* font) {
     return instance && font && static_cast<waskin::Skin*>(instance)->LyricFont(*font);
 }
+BOOL WINAPI VolumeTracking(void* instance) {return instance && static_cast<waskin::Skin*>(instance)->VolumeTracking();}
+BOOL WINAPI PlaylistReveal(void* instance,uint32_t row,int32_t caret) {
+    try {return instance && static_cast<waskin::Skin*>(instance)->PlaylistReveal(row,caret);} catch(...) {return FALSE;}
+}
 BOOL WINAPI ContentMinimum(void* instance,HWND window,SIZE* size) {
     return instance && size && static_cast<waskin::Skin*>(instance)->ContentMinimum(window,*size);
 }
@@ -106,7 +110,7 @@ extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* outpu
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
         L"waskin",waskin::MakiLibrary::Available()?L".wsz;.wal":L".wsz",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight,PlaylistDrop,ContentMinimum,waskin::kBuiltinPackage,
-        L"https://skins.webamp.org/",Check,LyricFont};
+        L"https://skins.webamp.org/",Check,LyricFont,VolumeTracking,PlaylistReveal};
     std::memcpy(output,&api,size);
     return S_OK;
 }
