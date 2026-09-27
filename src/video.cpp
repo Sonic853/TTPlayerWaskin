@@ -5,7 +5,6 @@ namespace waskin {
 namespace {
 constexpr UINT modeFirst=700, effectFirst=710, actionFirst=720;
 const wchar_t* const modes[]={L"歌词",L"视觉效果",L"歌词与视觉同屏"};
-const wchar_t* const effects[]={L"无",L"梦幻",L"频谱分析",L"波形",L"专辑封面"};
 }
 
 void Skin::DrawVideo(View& view,HDC dc,int width,int height) {
@@ -71,7 +70,7 @@ bool Skin::ContentState(TtpSkinContent& state,bool apply) {
     const HWND window=views_[3].window;
     if(state.size<sizeof(state) || !window || state.window!=window) return false;
     if(apply) {
-        if(state.mode<1 || state.mode>3 || state.visual_type>4) return false;
+        if(state.mode<1 || state.mode>3 || state.visual_type>=visualEffectNames.size()) return false;
         // A mode change must never commit a partially dragged lyric seek.
         SendMessageW(window,WM_CANCELMODE,0,0);
         layout_.content_mode=state.mode;layout_.visual_type=state.visual_type;
@@ -119,7 +118,7 @@ HMENU Skin::Menu(HWND window,uint32_t command) {
     if(command) {
         SendMessageW(window,WM_CANCELMODE,0,0);
         if(command>=modeFirst && command<modeFirst+3) layout_.content_mode=int(command-modeFirst)+1;
-        else if(command>=effectFirst && command<effectFirst+5) layout_.visual_type=int(command-effectFirst);
+        else if(command>=effectFirst && command<effectFirst+visualEffectNames.size()) layout_.visual_type=int(command-effectFirst);
         else if(command>=actionFirst && command<actionFirst+5) VideoAction(view,hitVideoFullscreen+int(command-actionFirst));
         VideoContentChanged();return nullptr;
     }
@@ -127,7 +126,7 @@ HMENU Skin::Menu(HWND window,uint32_t command) {
     if(!root || !visual) {if(root) DestroyMenu(root);if(visual) DestroyMenu(visual);return nullptr;}
     for(UINT i=0;i<3;++i) AppendMenuW(root,MF_STRING|(layout_.content_mode==int(i)+1?MF_CHECKED:0),modeFirst+i,modes[i]);
     AppendMenuW(root,MF_SEPARATOR,0,nullptr);
-    for(UINT i=0;i<5;++i) AppendMenuW(visual,MF_STRING|(layout_.visual_type==int(i)?MF_CHECKED:0),effectFirst+i,effects[i]);
+    for(UINT i=0;i<visualEffectNames.size();++i) AppendMenuW(visual,MF_STRING|(layout_.visual_type==int(i)?MF_CHECKED:0),effectFirst+i,visualEffectNames[i]);
     AppendMenuW(root,MF_POPUP,reinterpret_cast<UINT_PTR>(visual),L"视觉效果类型");
     AppendMenuW(root,MF_STRING,actionFirst,L"全屏显示当前内容");
     AppendMenuW(root,MF_STRING,actionFirst+1,L"普通窗口大小");

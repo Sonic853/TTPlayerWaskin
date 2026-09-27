@@ -11,6 +11,9 @@
 #include "spectrum.h"
 
 namespace waskin {
+// Keep provider menus, persisted layouts and the host content callback in sync.
+inline constexpr std::array<const wchar_t*,7> visualEffectNames{
+    L"无",L"梦幻",L"频谱分析",L"波形",L"专辑封面",L"韵动脉冲",L"水波荡漾"};
 enum SkinHit {
     hitShade=500, hitDrag=501, hitResize=502, hitShuffle=503, hitRepeat=504,
     hitSeek=505, hitVolume=506, hitBalance=507, hitScroll=508, hitScale=509,

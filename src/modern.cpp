@@ -728,7 +728,7 @@ HRESULT Modern::Layout(TtpSkinLayout& state,bool restore){
    if(!(input>>version>>left>>right>>vis>>scroll) || (version<1 || version>3) || left<0 || left>1 || right<0 || right>1 || vis<0 || vis>1 || scroll<0)return E_INVALIDARG;
    if(version>=2 && !(input>>std::quoted(layoutId)))return E_INVALIDARG;
    if(!layoutId.empty() && std::none_of(impl_->layouts.begin(),impl_->layouts.end(),[&](Node* n){return Lower(n->Id())==Lower(layoutId);}))return E_INVALIDARG;
-   if(version>=3 && (!(input>>contentMode>>contentVisual) || contentMode<1 || contentMode>3 || contentVisual>4))return E_INVALIDARG;
+   if(version>=3 && (!(input>>contentMode>>contentVisual) || contentMode<1 || contentMode>3 || contentVisual>=visualEffectNames.size()))return E_INVALIDARG;
    input>>std::ws;if(!input.eof())return E_INVALIDARG;
   }
   auto fallback=state;wcscpy_s(fallback.state,text.empty()?L"":text.substr(separator+1).c_str());
@@ -747,7 +747,7 @@ bool Modern::ContentState(TtpSkinContent& state,bool apply){
  if(state.window!=impl_->window)return Skin::ContentState(state,apply);
  if(state.size<sizeof(state) || !impl_->window)return false;
  if(apply){
-  if(state.mode<1 || state.mode>3 || state.visual_type>4)return false;
+   if(state.mode<1 || state.mode>3 || state.visual_type>=visualEffectNames.size())return false;
   SendMessageW(impl_->window,WM_CANCELMODE,0,0);
   impl_->contentMode=state.mode;impl_->contentVisual=state.visual_type;
   impl_->SyncContent(true);InvalidateRect(impl_->window,nullptr,FALSE);
@@ -759,16 +759,15 @@ HMENU Modern::Menu(HWND window,uint32_t command){
  if(command){
   TtpSkinContent c{sizeof(c),window};if(!ContentState(c,false))return nullptr;
   if(command>=700 && command<703)c.mode=command-699;
-  else if(command>=710 && command<715)c.visual_type=command-710;
+  else if(command>=710 && command<710+visualEffectNames.size())c.visual_type=command-710;
   else if(command==720)impl_->Command(TTP_SKIN_CONTENT_FULLSCREEN,c.mode|(c.visual_type<<8));
   ContentState(c,true);return nullptr;
  }
  HMENU menu=CreatePopupMenu(),effects=CreatePopupMenu();
  if(!menu || !effects){if(menu)DestroyMenu(menu);if(effects)DestroyMenu(effects);return nullptr;}
  const wchar_t* modes[]={L"歌词",L"视觉效果",L"歌词与视觉同屏"};
- const wchar_t* names[]={L"无",L"梦幻",L"频谱分析",L"波形",L"专辑封面"};
  for(UINT i=0;i<3;++i)AppendMenuW(menu,MF_STRING|(impl_->contentMode==i+1?MF_CHECKED:0),700+i,modes[i]);
- for(UINT i=0;i<5;++i)AppendMenuW(effects,MF_STRING|(impl_->contentVisual==i?MF_CHECKED:0),710+i,names[i]);
+ for(UINT i=0;i<visualEffectNames.size();++i)AppendMenuW(effects,MF_STRING|(impl_->contentVisual==i?MF_CHECKED:0),710+i,visualEffectNames[i]);
  AppendMenuW(menu,MF_POPUP,reinterpret_cast<UINT_PTR>(effects),L"视觉效果类型");
  AppendMenuW(menu,MF_STRING,720,L"全屏显示当前内容");return menu;
 }

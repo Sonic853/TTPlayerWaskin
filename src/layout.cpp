@@ -39,7 +39,8 @@ HRESULT Skin::Layout(TtpSkinLayout& state,bool restore) {
         if(version==2) {
             auto& video=next.bounds[3];
             if(!(input>>video.left>>video.top>>video.right>>video.bottom>>next.content_mode>>next.visual_type) ||
-               next.content_mode<1 || next.content_mode>3 || next.visual_type<0 || next.visual_type>4)
+               next.content_mode<1 || next.content_mode>3 || next.visual_type<0 ||
+               static_cast<size_t>(next.visual_type)>=visualEffectNames.size())
                 return E_INVALIDARG;
             if(!IsRectEmpty(&video)) {
                 const int64_t width=int64_t(video.right)-video.left,height=int64_t(video.bottom)-video.top;
