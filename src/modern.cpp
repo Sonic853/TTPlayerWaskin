@@ -1,5 +1,6 @@
 #include "modern.h"
 #include "host_interaction.h"
+#include "playlist_interaction.h"
 #include "modern_objects.h"
 #include "modern_document.h"
 #include "modern_capabilities.h"
@@ -78,7 +79,7 @@ struct Modern::Impl {
  size_t depth{},instantiateDepth{},imageBytes{};int observedVolume{-1};int playback{},scroll{},selected{-1},drop{-1};
  HWND window{},tooltip{};std::wstring tipText;Node *hover{},*pressed{};POINT down{};
  bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{},volumeGesture{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
- int revealRow{-1};
+ int revealRow{-1},wheel{};bool playlistFocus{};
  std::vector<std::pair<HWND,bool>> children;std::unique_ptr<Gdiplus::Bitmap> frame;
  bool restoreLeft{},restoreRight{},restoreVis{};
  RECT contentRect{},notifiedContent{};
@@ -87,7 +88,7 @@ struct Modern::Impl {
  explicit Impl(const wchar_t* path,const TtpSkinHost* h):archive(path,true),document(archive,true) {
   if(h){std::memcpy(&host,h,TTP_SKIN_HOST_V1_SIZE);
 #define COPY_HOST(field) if(h->size>=offsetof(TtpSkinHost,field)+sizeof(h->field))host.field=h->field
-   COPY_HOST(drag);COPY_HOST(selection);COPY_HOST(visual);COPY_HOST(tip);COPY_HOST(resize);COPY_HOST(spectrum);COPY_HOST(content);COPY_HOST(content_input);COPY_HOST(option);
+   COPY_HOST(drag);COPY_HOST(selection);COPY_HOST(visual);COPY_HOST(tip);COPY_HOST(resize);COPY_HOST(spectrum);COPY_HOST(content);COPY_HOST(content_input);COPY_HOST(option);COPY_HOST(playlist_context);
 #undef COPY_HOST
   }
   metadata=ReadMetadata(archive.Read("skin.xml"));
@@ -439,7 +440,9 @@ struct Modern::Impl {
   Gdiplus::StringFormat format;format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
   for(int row=scroll;row<std::min(int(state.track_count),scroll+rows);++row){
    TtpSkinTrack track{};track.size=sizeof(track);if(!host.track || !host.track(host.context,uint32_t(row),&track))continue;
-   const bool selectedRow=host.selection?(host.selection(host.context,uint32_t(row))&1)!=0:row==selected;
+   const auto flags=host.selection?host.selection(host.context,uint32_t(row)):uint32_t(row==selected?3:0);
+   if(flags&2)selected=row;
+   const bool selectedRow=(flags&1)!=0;
    COLORREF c=Color(row==state.playing_row?L"wasabi.list.text.current":L"wasabi.list.text",RGB(255,255,255));
    if(selectedRow){Gdiplus::SolidBrush selection(GColor(Color(L"wasabi.list.text.selected.background",RGB(0,120,215))));
     g.FillRectangle(&selection,r.left,r.top+(row-scroll)*14,r.right-r.left,14);c=Color(L"wasabi.list.text.selected",RGB(255,255,255));}
@@ -567,6 +570,16 @@ struct Modern::Impl {
   if(delegated)Drag(TTP_SKIN_DRAG_END,p);
  }
  int Row(POINT p)const{const int row=scroll+int(p.y-playlistRect.top)/14;return PtInRect(&playlistRect,p) && row>=0 && row<int(StateConst().track_count)?row:-1;}
+ bool PlaylistHit(POINT p,bool edge=false)const {
+  if(edge) {
+   if(!PlaylistDropContains(playlistRect,p))return false;
+   p.x=std::clamp(p.x,playlistRect.left,playlistRect.right-1);
+   p.y=std::clamp(p.y,playlistRect.top,playlistRect.bottom-1);
+  } else if(!PtInRect(&playlistRect,p))return false;
+  // A closed drawer may still paint its list underneath the player body.
+  // Only the topmost component can accept input or the two-pixel edge strip.
+  auto* n=HitTest(p);return n && n->attrs[L"param"]==L"guid:pl";
+ }
  TtpSkinState StateConst()const{TtpSkinState s{};s.size=sizeof(s);if(host.query)host.query(host.context,&s);return s;}
  void Select(int row,WPARAM keys){if(row<0)return;selected=row;Command(keys&MK_SHIFT?(keys&MK_CONTROL?TTP_SKIN_EXTEND_TOGGLE_ROW:TTP_SKIN_EXTEND_ROW):(keys&MK_CONTROL?TTP_SKIN_TOGGLE_ROW:TTP_SKIN_SELECT_ROW),row);}
  void Tip(POINT p){
@@ -591,6 +604,10 @@ struct Modern::Impl {
  }
  LRESULT Message(UINT message,WPARAM wp,LPARAM lp){
   POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
+  if(message==WM_LBUTTONDOWN || message==WM_RBUTTONDOWN)playlistFocus=PlaylistHit(p);
+  if(message==WM_CONTEXTMENU && lp==LPARAM(-1) && playlistFocus && !IsRectEmpty(&playlistRect)) {
+   PlaylistContext(host,window,selected,PlaylistMenuPoint(playlistRect,14,selected,scroll),0,true);return 0;
+  }
   LRESULT contentResult{};if(ContentInput(message,wp,lp,contentResult))return contentResult;
   switch(message){
   case WM_ERASEBKGND:if(wp)Draw(reinterpret_cast<HDC>(wp),WindowFromDC(reinterpret_cast<HDC>(wp))!=window);return 1;
@@ -616,7 +633,7 @@ struct Modern::Impl {
    if(moving){if(GetCapture()==window)Move(p);else EndMove(p);InvalidateRect(window,nullptr,FALSE);return 0;}
    if(consumed){InvalidateRect(window,nullptr,FALSE);return 0;}}
    if(pressed && pressed->kind==L"slider")Slide(pressed,p,false);
-   else if(pressed && pressed->attrs[L"param"]==L"guid:pl" && !rowDragging &&
+   else if(pressed && pressed->attrs[L"param"]==L"guid:pl" && !rowDragging && PlaylistDragEnabled(host) &&
        (std::abs(p.x-down.x)>=GetSystemMetrics(SM_CXDRAG) || std::abs(p.y-down.y)>=GetSystemMetrics(SM_CYDRAG))){
     rowDragging=true;pressed=nullptr;if(GetCapture()==window)ReleaseCapture();Command(TTP_SKIN_DRAG_SELECTION,1);
    }else if(!pressed)Tip(p);
@@ -631,9 +648,10 @@ struct Modern::Impl {
    if(volume)EndVolume(host);
    InvalidateRect(window,nullptr,FALSE);return 0;}
   case WM_LBUTTONDBLCLK:if(auto* n=HitTest(p);n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0)Command(TTP_SKIN_PLAY_ROW,row);}return 0;
-  case WM_RBUTTONUP:{auto* n=HitTest(p);if(n && n->attrs[L"param"]==L"guid:pl"){int row=Row(p);if(row>=0 && !(host.selection && (host.selection(host.context,row)&1)))Select(row,0);Command(TTP_SKIN_LIST_MENU,row);}
+  case WM_RBUTTONDOWN:if(playlistFocus){SetFocus(window);return 0;}break;
+  case WM_RBUTTONUP:{auto* n=HitTest(p);if(n && n->attrs[L"param"]==L"guid:pl")PlaylistContext(host,window,Row(p),p,wp);
    else Command(n && n->kind==L"vis"?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);return 0;}
-  case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PtInRect(&playlistRect,p)){scroll=std::max(0,scroll-GET_WHEEL_DELTA_WPARAM(wp)/WHEEL_DELTA*3);InvalidateRect(window,nullptr,FALSE);}
+  case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PlaylistHit(p)){PlaylistWheel(wp,wheel,scroll,int(State().track_count),PlaylistPage(playlistRect,14));InvalidateRect(window,nullptr,FALSE);}
    else VolumeWheel(host,GET_WHEEL_DELTA_WPARAM(wp),State().volume);return 0;
   case WM_KEYDOWN:
    if(wp==VK_DELETE && selected>=0){Command(TTP_SKIN_DELETE_SELECTED);return 0;}
@@ -790,12 +808,13 @@ bool Modern::PlaylistReveal(uint32_t row,int32_t caret){
 }
 bool Modern::PlaylistDrop(TtpSkinPlaylistDrop& drop){
  if(drop.size<sizeof(drop) || drop.window!=impl_->window)return Skin::PlaylistDrop(drop);
+ if(drop.phase>TTP_SKIN_DROP_LEAVE)return false;
  drop.insertion=-1;
- auto* hit=impl_->HitTest(drop.point);
- const bool inside=hit && hit->attrs[L"param"]==L"guid:pl" && PtInRect(&impl_->playlistRect,drop.point);
+ const bool inside=impl_->PlaylistHit(drop.point,true);
+ int top=impl_->scroll;
  if(drop.phase!=TTP_SKIN_DROP_LEAVE && inside)
-  drop.insertion=std::min(int(impl_->State().track_count),impl_->scroll+int(drop.point.y-impl_->playlistRect.top)/14);
- if(drop.phase!=TTP_SKIN_DROP_QUERY){impl_->drop=drop.insertion;InvalidateRect(impl_->window,nullptr,FALSE);}
+  drop.insertion=PlaylistInsertion(impl_->playlistRect,14,drop.point,top,int(impl_->State().track_count),drop.phase==TTP_SKIN_DROP_PREVIEW);
+ if(drop.phase!=TTP_SKIN_DROP_QUERY){impl_->scroll=top;impl_->drop=drop.insertion;impl_->Render();InvalidateRect(impl_->window,nullptr,FALSE);}
  return inside || drop.phase==TTP_SKIN_DROP_LEAVE;
 }
 }

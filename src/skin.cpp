@@ -1,5 +1,6 @@
 #include "skin.h"
 #include "host_interaction.h"
+#include "playlist_interaction.h"
 #include "builtin_skin.h"
 #include <windowsx.h>
 #include <algorithm>
@@ -123,7 +124,8 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only):fallb
         if(host->size>=offsetof(TtpSkinHost,content)) host_.spectrum=host->spectrum;
         if(host->size>=offsetof(TtpSkinHost,content_input)) host_.content=host->content;
         if(host->size>=offsetof(TtpSkinHost,option)) host_.content_input=host->content_input;
-        if(host->size>=sizeof(TtpSkinHost)) host_.option=host->option;
+        if(host->size>=offsetof(TtpSkinHost,option)+sizeof(host->option)) host_.option=host->option;
+        if(host->size>=offsetof(TtpSkinHost,playlist_context)+sizeof(host->playlist_context)) host_.playlist_context=host->playlist_context;
     }
     const auto& builtin=BuiltinArchive();
     std::optional<Archive> package;
@@ -642,11 +644,13 @@ bool Skin::PlaylistDrop(TtpSkinPlaylistDrop& drop) {
     if(drop.phase!=TTP_SKIN_DROP_LEAVE && GetClientRect(view.window,&client) && PtInRect(&client,drop.point)) {
         const int count=int(State().track_count);
         if(view.shaded) drop.insertion=count; // Winamp pledit.cpp: folded playlist appends.
-        else if(Inside(drop.point,12,22,client.right-32,client.bottom-60)) {
-            const int rows=std::max(1,(int(client.bottom)-60)/row_height_);
-            // Match DrawPlaylist even if a wheel/resize has queued a paint.
-            const int top=std::clamp(view.scroll,0,std::max(0,count-rows));
-            drop.insertion=std::min(count,top+(int(drop.point.y)-22)/row_height_);
+        else {
+            int top=view.scroll;
+            drop.insertion=PlaylistInsertion({12,22,client.right-20,client.bottom-38},row_height_,drop.point,top,count,
+                drop.phase==TTP_SKIN_DROP_PREVIEW);
+            if(drop.phase==TTP_SKIN_DROP_PREVIEW && view.scroll!=top) {
+                view.scroll=top;InvalidateRect(view.window,nullptr,FALSE);
+            }
         }
     }
     if(drop.phase!=TTP_SKIN_DROP_QUERY && view.external_drop!=drop.insertion) {
@@ -994,16 +998,19 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
             Command(TTP_SKIN_CONTENT_MENU,lp==LPARAM(-1)?1:0);return 0;
         }
         if(lp==LPARAM(-1)) {
-            if(v.kind==1) Command(TTP_SKIN_LIST_MENU,v.selected);
+            if(v.kind==1) {
+                RECT r{};GetClientRect(v.window,&r);const RECT list{12,22,r.right-20,r.bottom-38};
+                PlaylistContext(host_,v.window,v.selected,PlaylistMenuPoint(list,row_height_,v.selected,v.scroll),0,true);
+            }
             else Command(v.kind==2?TTP_SKIN_EQ_PRESETS:TTP_SKIN_MENU);
         }
         return 0;
-    case WM_RBUTTONDOWN: HideTip(v);return 0;
+    case WM_RBUTTONDOWN: HideTip(v);if(v.kind==1)SetFocus(v.window);return 0;
     case WM_RBUTTONUP: {
         HideTip(v);
         const int hit=Hit(v,point);
         if(v.kind==3) Command(TTP_SKIN_CONTENT_MENU);
-        else if(v.kind==1) Command(TTP_SKIN_LIST_MENU,hit>=hitRow && uint32_t(hit-hitRow)<State().track_count?hit-hitRow:-1);
+        else if(v.kind==1) PlaylistContext(host_,v.window,hit>=hitRow && uint32_t(hit-hitRow)<State().track_count?hit-hitRow:-1,raw,wp);
         else if(v.kind==2) Command(TTP_SKIN_EQ_PRESETS);
         else Command(hit==TTP_SKIN_VISUAL_NEXT?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);
         return 0;
@@ -1043,6 +1050,7 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         UpdateTip(v,point);
         if(GetCapture()==v.window) {
             if(v.pressed>=hitRow) {
+                if(!PlaylistDragEnabled(host_))return 0;
                 if(std::abs(raw.x-v.drag_start.x)>=GetSystemMetrics(SM_CXDRAG) || std::abs(raw.y-v.drag_start.y)>=GetSystemMetrics(SM_CYDRAG)) v.row_drag=true;
                 if(v.row_drag) {
                     RECT r{};GetClientRect(v.window,&r);v.drop=-1;
@@ -1054,11 +1062,7 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
                         HideTip(v);ReleaseCapture();InvalidateRect(v.window,nullptr,FALSE);
                         Command(TTP_SKIN_DRAG_SELECTION);return 0;
                     }
-                    if(Inside(point,12,22,r.right-32,r.bottom-60)) {
-                        if(point.y<22+row_height_) v.scroll=std::max(0,v.scroll-1);
-                        else if(point.y>=r.bottom-38-row_height_) v.scroll=std::min(std::max(0,int(State().track_count)-1),v.scroll+1);
-                        v.drop=std::clamp(v.scroll+(int(point.y)-22+row_height_/2)/row_height_,0,int(State().track_count));
-                    }
+                    v.drop=PlaylistInsertion({12,22,r.right-20,r.bottom-38},row_height_,point,v.scroll,int(State().track_count),true,true);
                     InvalidateRect(v.window,nullptr,FALSE);
                 }
             } else if(v.dragging || v.resizing) {
@@ -1075,7 +1079,12 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
     case WM_LBUTTONUP: {
         const int hit=v.pressed;
         if(hit>=hitRow) {
-            if(v.row_drag && v.drop>=0) Command((wp&MK_CONTROL)?TTP_SKIN_COPY_SELECTION:TTP_SKIN_MOVE_SELECTION,v.drop);
+            RECT r{};GetClientRect(v.window,&r);
+            if(v.row_drag && PlaylistDragEnabled(host_)) {
+                // Validate the release too: the final point need not have a preceding mouse move.
+                v.drop=PlaylistInsertion({12,22,r.right-20,r.bottom-38},row_height_,point,v.scroll,int(State().track_count),false,true);
+                if(v.drop>=0)Command((wp&MK_CONTROL)?TTP_SKIN_COPY_SELECTION:TTP_SKIN_MOVE_SELECTION,v.drop);
+            }
             else if(!v.row_drag && v.selection_pending) SelectRow(v,hit-hitRow);
             v.pressed=0;v.row_drag=false;v.selection_pending=false;v.drop=-1;
             if(GetCapture()==v.window) ReleaseCapture();InvalidateRect(v.window,nullptr,FALSE);return 0;
@@ -1104,7 +1113,11 @@ LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
         InvalidateRect(v.window,nullptr,FALSE);return 0;
     case WM_MOUSEWHEEL:
         HideTip(v);
-        if(v.kind==1) {v.wheel+=GET_WHEEL_DELTA_WPARAM(wp);v.scroll=std::max(0,v.scroll-(v.wheel/WHEEL_DELTA)*3);v.wheel%=WHEEL_DELTA;InvalidateRect(v.window,nullptr,FALSE);}
+        if(v.kind==1) {
+            RECT r{};GetClientRect(v.window,&r);
+            PlaylistWheel(wp,v.wheel,v.scroll,int(State().track_count),std::max(1,(int(r.bottom)-60)/row_height_));
+            InvalidateRect(v.window,nullptr,FALSE);
+        }
         else VolumeWheel(host_,GET_WHEEL_DELTA_WPARAM(wp),State().volume);
         return 0;
     case WM_KEYDOWN:
