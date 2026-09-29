@@ -126,6 +126,7 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only):fallb
         if(host->size>=offsetof(TtpSkinHost,option)) host_.content_input=host->content_input;
         if(host->size>=offsetof(TtpSkinHost,option)+sizeof(host->option)) host_.option=host->option;
         if(host->size>=offsetof(TtpSkinHost,playlist_context)+sizeof(host->playlist_context)) host_.playlist_context=host->playlist_context;
+        if(host->size>=offsetof(TtpSkinHost,playlist_font)+sizeof(host->playlist_font)) host_.playlist_font=host->playlist_font;
     }
     const auto& builtin=BuiltinArchive();
     std::optional<Archive> package;
@@ -218,6 +219,20 @@ Skin::Skin(const wchar_t* path,const TtpSkinHost* host,bool fallback_only):fallb
     for(int i=0;i<4;++i) { views_[i].skin=this; views_[i].kind=i; }
 }
 Skin::~Skin() { Detach(); if(font_) DeleteObject(font_); }
+bool Skin::DefaultPlaylistFont(LOGFONTW& font) const {
+    return font_ && GetObjectW(font_,sizeof(font),&font)==sizeof(font);
+}
+void Skin::SyncPlaylistFont() {
+    LOGFONTW fallback{};
+    if(DefaultPlaylistFont(fallback) && playlist_font_.Update(host_,fallback,views_[1].window!=nullptr)) {
+        row_height_=playlist_font_.Height();HideTip(views_[1]);
+        auto& view=views_[1];RECT bounds{};
+        if(view.window && GetClientRect(view.window,&bounds)) {
+            const int height=view.shaded?view.expanded_height:int(bounds.bottom);
+            view.scroll=std::clamp(view.scroll,0,std::max(0,int(State().track_count)-std::max(1,(height-60)/row_height_)));
+        }
+    }
+}
 TtpSkinState Skin::State() const {
     TtpSkinState state{}; state.size=sizeof(state); state.volume=100; state.elapsed=1; state.playing_row=-1;
     wcscpy_s(state.title,L"TTPlayer");
@@ -257,7 +272,7 @@ void Skin::TextBackground(HDC dc,RECT bounds,bool bitmap) const {
         Fill(dc,{bounds.left,bounds.top+y,bounds.right,bounds.top+y+1},GetPixel(source,4,y));
     SelectObject(source,old);DeleteDC(source);
 }
-void Skin::Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap) const {
+void Skin::Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap,HFONT font) const {
     const bool ascii=std::all_of(text.begin(),text.end(),[](wchar_t c){return c>=32 && c<127;});
     if(bitmap && ascii) {
         const int saved=SaveDC(dc); IntersectClipRect(dc,bounds.left,bounds.top,bounds.right,bounds.bottom);
@@ -280,7 +295,7 @@ void Skin::Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool 
         }
         RestoreDC(dc,saved); return;
     }
-    const auto old=SelectObject(dc,font_?font_:GetStockObject(DEFAULT_GUI_FONT));
+    const auto old=SelectObject(dc,font?font:font_?font_:GetStockObject(DEFAULT_GUI_FONT));
     SetBkMode(dc,TRANSPARENT); SetTextColor(dc,color);
     DrawTextW(dc,text.c_str(),int(text.size()),&bounds,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX);
     SelectObject(dc,old);
@@ -382,6 +397,7 @@ void Skin::DrawMain(View& view,HDC dc,const TtpSkinState& s) {
     Text(dc,{156,43,171,49},s.sample_rate>0?std::to_wstring(s.sample_rate/1000):L"",current_,true);
 }
 void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinState& s) {
+    SyncPlaylistFont();
     Fill(dc,{0,0,width,height},background_);
     const int state=GetActiveWindow()==view.window?0:21;
     const int pressed=view.hot?view.pressed:0;
@@ -418,7 +434,9 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
         const int rows=std::max(1,(height-60)/row_height_);
         const int maximum=std::max(0,int(s.track_count)-rows);
         view.scroll=std::clamp(view.scroll,0,maximum);
-        for(int i=0;i<rows && uint32_t(view.scroll+i)<s.track_count;++i) {
+        const int row_clip=SaveDC(dc);IntersectClipRect(dc,12,22,width-20,height-38);
+        const int drawn_rows=std::max(1,(height-60+row_height_-1)/row_height_);
+        for(int i=0;i<drawn_rows && uint32_t(view.scroll+i)<s.track_count;++i) {
             const int index=view.scroll+i,y=22+i*row_height_;
             const uint32_t flags=host_.selection?host_.selection(host_.context,uint32_t(index)):(index==view.selected?1u:0u);
             if(flags&2) view.selected=index;
@@ -427,11 +445,12 @@ void Skin::DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinStat
             if(host_.track && host_.track(host_.context,uint32_t(index),&track)) {
                 const auto color=index==s.playing_row?current_:normal_;
                 const auto duration=track.duration_ms>=0?Time(track.duration_ms):L"";
-                const auto old=SelectObject(dc,font_);SIZE size{};GetTextExtentPoint32W(dc,duration.data(),int(duration.size()),&size);SelectObject(dc,old);
-                Text(dc,{13,y,width-24-size.cx,y+row_height_},std::to_wstring(index+1)+L". "+track.title,color);
-                Text(dc,{width-22-size.cx,y,width-20,y+row_height_},duration,color);
+                const auto old=SelectObject(dc,playlist_font_.Font());SIZE size{};GetTextExtentPoint32W(dc,duration.data(),int(duration.size()),&size);SelectObject(dc,old);
+                Text(dc,{13,y,width-24-size.cx,y+row_height_},std::to_wstring(index+1)+L". "+track.title,color,false,playlist_font_.Font());
+                Text(dc,{width-22-size.cx,y,width-20,y+row_height_},duration,color,false,playlist_font_.Font());
             }
         }
+        RestoreDC(dc,row_clip);
         const int drop=view.external_drop>=0?view.external_drop:view.row_drag?view.drop:-1;
         if(drop>=view.scroll && drop<=view.scroll+rows) {
             const int y=std::min(height-39,22+(drop-view.scroll)*row_height_);
@@ -628,6 +647,7 @@ bool Skin::VolumeTracking() const {
     });
 }
 bool Skin::PlaylistReveal(uint32_t row,int32_t caret) {
+    SyncPlaylistFont();
     auto& v=views_[1];if(!v.window || row>INT_MAX || row>=State().track_count)return false;
     RECT bounds{};GetClientRect(v.window,&bounds);
     const int rows=std::max(1,((v.shaded?v.expanded_height:int(bounds.bottom))-60)/row_height_);
@@ -637,6 +657,7 @@ bool Skin::PlaylistReveal(uint32_t row,int32_t caret) {
     HideTip(v);InvalidateRect(v.window,nullptr,FALSE);return true;
 }
 bool Skin::PlaylistDrop(TtpSkinPlaylistDrop& drop) {
+    SyncPlaylistFont();
     auto& view=views_[1];
     if(drop.size<sizeof(drop) || !view.window || drop.window!=view.window || drop.phase>TTP_SKIN_DROP_LEAVE) return false;
     drop.insertion=-1;
@@ -657,6 +678,18 @@ bool Skin::PlaylistDrop(TtpSkinPlaylistDrop& drop) {
         view.external_drop=drop.insertion;
         InvalidateRect(view.window,nullptr,FALSE);
     }
+    return true;
+}
+bool Skin::PlaylistViewport(HWND window,uint32_t& first,uint32_t& count) {
+    auto& view=views_[1];
+    if(!window || view.window!=window)return false;
+    first=count=0;
+    if(view.shaded || !IsWindowVisible(window) || IsIconic(window))return true;
+    SyncPlaylistFont();RECT client{};GetClientRect(window,&client);
+    const int height=std::max(0,int(client.bottom)-60),tracks=int(State().track_count);
+    view.scroll=std::clamp(view.scroll,0,std::max(0,tracks-std::max(1,height/row_height_)));
+    first=uint32_t(view.scroll);
+    count=uint32_t(std::min(tracks-view.scroll,(height+row_height_-1)/row_height_));
     return true;
 }
 void Skin::Detach() noexcept {
@@ -801,8 +834,7 @@ int Skin::Hit(const View& v,POINT p,RECT* bounds) const {
         if(inside(r.right-15,r.bottom-36,8,5)) return hitScrollUp;
         if(inside(r.right-15,r.bottom-31,8,5)) return hitScrollDown;
         if(inside(r.right-15,20,8,r.bottom-58)) return hitScroll;
-        const int rows=std::max(1,(int(r.bottom)-60)/row_height_);
-        if(inside(12,22,r.right-32,rows*row_height_)) {
+        if(inside(12,22,r.right-32,r.bottom-60)) {
             const int row=(p.y-22)/row_height_;
             if(bounds) *bounds={12,22+row*row_height_,r.right-20,22+(row+1)*row_height_};
             return hitRow+v.scroll+row;
@@ -942,6 +974,7 @@ void Skin::EndDrag(View& v) {
     if(delegated) HostDrag(v,TTP_SKIN_DRAG_END);
 }
 LRESULT Skin::Message(View& v,UINT message,WPARAM wp,LPARAM lp) {
+    if(v.kind==1)SyncPlaylistFont();
     if(v.kind==3 && host_.content_input &&
        (message==WM_SIZE || (!v.pressed && !v.dragging && !v.resizing))) {
         TtpSkinContent content{sizeof(content),v.window};

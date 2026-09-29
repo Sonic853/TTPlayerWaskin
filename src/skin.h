@@ -9,6 +9,7 @@
 #include <vector>
 #include <commctrl.h>
 #include "spectrum.h"
+#include "playlist_font.h"
 
 namespace waskin {
 // Keep provider menus, persisted layouts and the host content callback in sync.
@@ -80,9 +81,11 @@ public:
     bool ContentMinimum(HWND window,SIZE& size) const;
     bool LyricColors(HWND window,TtpSkinLyricColors& colors) const;
     virtual bool LyricFont(LOGFONTW& font) const;
+    virtual bool DefaultPlaylistFont(LOGFONTW& font) const;
     virtual bool VolumeTracking() const;
     virtual bool PlaylistReveal(uint32_t row,int32_t caret);
     virtual bool PlaylistDrop(TtpSkinPlaylistDrop& drop);
+    virtual bool PlaylistViewport(HWND window,uint32_t& first,uint32_t& count);
     static LRESULT CALLBACK Subclass(HWND,UINT,WPARAM,LPARAM,UINT_PTR,DWORD_PTR);
 private:
     bool fallback_only_{};
@@ -122,6 +125,8 @@ private:
     std::array<View,4> views_{};
     TtpSkinHost host_{};
     HFONT font_{};
+    PlaylistFontCache playlist_font_;
+    void SyncPlaylistFont();
     COLORREF normal_{RGB(0,255,0)}, current_{RGB(255,255,255)}, background_{RGB(0,0,0)}, selection_{RGB(0,0,198)};
     unsigned ticks_{};
     bool Sliding(int hit) const;
@@ -129,7 +134,7 @@ private:
     void Command(uint32_t command,int32_t value=0) const;
     bool Blit(HDC dc,const char* image,int x,int y,int w,int h,int sx=0,int sy=0,int sw=0,int sh=0) const;
     void TextBackground(HDC dc,RECT bounds,bool bitmap) const;
-    void Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap=false) const;
+    void Text(HDC dc,RECT bounds,const std::wstring& text,COLORREF color,bool bitmap=false,HFONT font=nullptr) const;
     void Draw(View& view,HDC dc,int width,int height);
     void DrawMain(View& view,HDC dc,const TtpSkinState& state);
     void DrawPlaylist(View& view,HDC dc,int width,int height,const TtpSkinState& state);

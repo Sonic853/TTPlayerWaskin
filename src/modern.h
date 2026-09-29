@@ -23,6 +23,8 @@ public:
     HMENU Menu(HWND,uint32_t) override;
     bool ContentState(TtpSkinContent&,bool) override;
     bool LyricFont(LOGFONTW&) const override;
+    bool DefaultPlaylistFont(LOGFONTW&) const override;
+    bool PlaylistViewport(HWND,uint32_t&,uint32_t&) override;
     bool VolumeTracking() const override;
     bool PlaylistReveal(uint32_t,int32_t) override;
 };

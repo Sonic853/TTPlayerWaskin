@@ -100,6 +100,12 @@ HRESULT WINAPI Check(const wchar_t* path,wchar_t* message,uint32_t count) {
 BOOL WINAPI PlaylistDrop(void* instance,TtpSkinPlaylistDrop* drop) {
     try {return instance && drop && static_cast<waskin::Skin*>(instance)->PlaylistDrop(*drop);} catch(...) {return FALSE;}
 }
+BOOL WINAPI DefaultPlaylistFont(void* instance,LOGFONTW* font) {
+    return instance && font && static_cast<waskin::Skin*>(instance)->DefaultPlaylistFont(*font);
+}
+BOOL WINAPI PlaylistViewport(void* instance,HWND window,uint32_t* first,uint32_t* count) {
+    try {return instance && first && count && static_cast<waskin::Skin*>(instance)->PlaylistViewport(window,*first,*count);} catch(...) {return FALSE;}
+}
 HRESULT WINAPI Layout(void* instance,TtpSkinLayout* state,BOOL restore) {
     if(!instance || !state || state->size<sizeof(*state)) return E_INVALIDARG;
     try {return static_cast<waskin::Skin*>(instance)->Layout(*state,restore!=FALSE);} catch(...) {return E_FAIL;}
@@ -110,7 +116,7 @@ extern "C" HRESULT WINAPI ttpGetSkinPlugin(uint32_t version,TtpSkinPlugin* outpu
     const auto size=static_cast<uint32_t>(std::min<size_t>(output->size,sizeof(*output)));
     const TtpSkinPlugin api{size,TTP_SKIN_ABI,L"Winamp",Probe,Create,Attach,Detach,Destroy,Preview,Shade,Paint,Translate,
         L"waskin",waskin::MakiLibrary::Available()?L".wsz;.wal":L".wsz",Layout,Handles,Menu,ContentState,LyricColors,LyricFontHeight,PlaylistDrop,ContentMinimum,waskin::kBuiltinPackage,
-        L"https://skins.webamp.org/",Check,LyricFont,VolumeTracking,PlaylistReveal};
+        L"https://skins.webamp.org/",Check,LyricFont,VolumeTracking,PlaylistReveal,DefaultPlaylistFont,PlaylistViewport};
     std::memcpy(output,&api,size);
     return S_OK;
 }

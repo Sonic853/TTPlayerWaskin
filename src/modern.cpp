@@ -80,6 +80,7 @@ struct Modern::Impl {
  HWND window{},tooltip{};std::wstring tipText;Node *hover{},*pressed{};POINT down{};
  bool ready{},completed{},fault{},moving{},hostMoving{},rowDragging{},selectionPending{},volumeGesture{};RECT saved{},restored{},playlistRect{},dragOrigin{};POINT dragAnchor{};HRGN savedRegion{};
  int revealRow{-1},wheel{};bool playlistFocus{};
+ PlaylistFontCache playlistFont;std::unique_ptr<Gdiplus::Font> rowFont;int rowHeight{14};LOGFONTW defaultPlaylistFont{};
  std::vector<std::pair<HWND,bool>> children;std::unique_ptr<Gdiplus::Bitmap> frame;
  bool restoreLeft{},restoreRight{},restoreVis{};
  RECT contentRect{},notifiedContent{};
@@ -88,7 +89,7 @@ struct Modern::Impl {
  explicit Impl(const wchar_t* path,const TtpSkinHost* h):archive(path,true),document(archive,true) {
   if(h){std::memcpy(&host,h,TTP_SKIN_HOST_V1_SIZE);
 #define COPY_HOST(field) if(h->size>=offsetof(TtpSkinHost,field)+sizeof(h->field))host.field=h->field
-   COPY_HOST(drag);COPY_HOST(selection);COPY_HOST(visual);COPY_HOST(tip);COPY_HOST(resize);COPY_HOST(spectrum);COPY_HOST(content);COPY_HOST(content_input);COPY_HOST(option);COPY_HOST(playlist_context);
+   COPY_HOST(drag);COPY_HOST(selection);COPY_HOST(visual);COPY_HOST(tip);COPY_HOST(resize);COPY_HOST(spectrum);COPY_HOST(content);COPY_HOST(content_input);COPY_HOST(option);COPY_HOST(playlist_context);COPY_HOST(playlist_font);
 #undef COPY_HOST
   }
   metadata=ReadMetadata(archive.Read("skin.xml"));
@@ -429,27 +430,52 @@ struct Modern::Impl {
  COLORREF Color(const wchar_t* id,COLORREF fallback)const{auto i=colors.find(id);return i==colors.end()?fallback:i->second;}
   static Gdiplus::Color GColor(COLORREF c){return Gdiplus::Color(255,GetRValue(c),GetGValue(c),GetBValue(c));}
   static Gdiplus::Font PlaylistFont(){return Gdiplus::Font(L"Tahoma",11,Gdiplus::FontStyleRegular,Gdiplus::UnitPixel);}
+ static LOGFONTW DefaultPlaylistFont() {
+  HDC dc=CreateCompatibleDC(nullptr);LOGFONTW font{};
+  {Gdiplus::Graphics graphics(dc);auto original=PlaylistFont();original.GetLogFontW(&graphics,&font);}
+  DeleteDC(dc);return font;
+ }
+ bool SyncPlaylistFont() {
+  if(!defaultPlaylistFont.lfHeight)defaultPlaylistFont=DefaultPlaylistFont();
+  if(!playlistFont.Update(host,defaultPlaylistFont,ready) && rowFont)return false;
+  HDC dc=CreateCompatibleDC(nullptr);
+  rowFont=std::make_unique<Gdiplus::Font>(dc,&playlistFont.Descriptor());DeleteDC(dc);
+  rowHeight=playlistFont.Height();
+  if(tooltip)SendMessageW(tooltip,TTM_POP,0,0);
+  return true;
+ }
  void Playlist(Gdiplus::Graphics& g,RECT r){
-  playlistRect=r;auto state=State();const int rows=std::max(1,int(r.bottom-r.top)/14);
+  SyncPlaylistFont();playlistRect=r;auto state=State();const int rows=std::max(1,int(r.bottom-r.top)/rowHeight);
   if(revealRow>=0){if(revealRow<scroll)scroll=revealRow;else if(revealRow>=scroll+rows)scroll=revealRow-rows+1;revealRow=-1;}
   scroll=std::clamp(scroll,0,std::max(0,int(state.track_count)-rows));
   Gdiplus::SolidBrush bg(GColor(Color(L"wasabi.list.background",RGB(0,0,0))));
   g.FillRectangle(&bg,int(r.left),int(r.top),int(r.right-r.left),int(r.bottom-r.top));
   auto clip=g.Save();g.SetClip(Gdiplus::Rect(r.left,r.top,r.right-r.left,r.bottom-r.top));
-   auto textFont=PlaylistFont();
+   auto& textFont=*rowFont;
   Gdiplus::StringFormat format;format.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);format.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-  for(int row=scroll;row<std::min(int(state.track_count),scroll+rows);++row){
+  for(int row=scroll;row<std::min(int(state.track_count),scroll+(int(r.bottom-r.top)+rowHeight-1)/rowHeight);++row){
    TtpSkinTrack track{};track.size=sizeof(track);if(!host.track || !host.track(host.context,uint32_t(row),&track))continue;
    const auto flags=host.selection?host.selection(host.context,uint32_t(row)):uint32_t(row==selected?3:0);
    if(flags&2)selected=row;
    const bool selectedRow=(flags&1)!=0;
    COLORREF c=Color(row==state.playing_row?L"wasabi.list.text.current":L"wasabi.list.text",RGB(255,255,255));
    if(selectedRow){Gdiplus::SolidBrush selection(GColor(Color(L"wasabi.list.text.selected.background",RGB(0,120,215))));
-    g.FillRectangle(&selection,r.left,r.top+(row-scroll)*14,r.right-r.left,14);c=Color(L"wasabi.list.text.selected",RGB(255,255,255));}
+    g.FillRectangle(&selection,r.left,r.top+(row-scroll)*rowHeight,r.right-r.left,rowHeight);c=Color(L"wasabi.list.text.selected",RGB(255,255,255));}
    Gdiplus::SolidBrush fg(GColor(c));std::wstring label=std::to_wstring(row+1)+L". "+track.title;
-   g.DrawString(label.c_str(),int(label.size()),&textFont,Gdiplus::RectF(float(r.left+2),float(r.top+(row-scroll)*14),float(r.right-r.left-4),14),&format,&fg);
+   const float y=float(r.top+(row-scroll)*rowHeight),width=float(r.right-r.left-4);
+   const auto duration=track.duration_ms>=0?Time(track.duration_ms):L"";
+   float timeWidth=0;
+   if(!duration.empty()) {
+    Gdiplus::RectF measured;g.MeasureString(duration.c_str(),int(duration.size()),&textFont,Gdiplus::PointF(0,0),&measured);
+    timeWidth=std::min(width,std::ceil(measured.Width));
+    Gdiplus::StringFormat right;right.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+    right.SetAlignment(Gdiplus::StringAlignmentFar);
+    g.DrawString(duration.c_str(),int(duration.size()),&textFont,Gdiplus::RectF(float(r.right-2)-timeWidth,y,timeWidth,float(rowHeight)),&right,&fg);
+   }
+   const float titleWidth=std::max(0.0f,width-timeWidth-(timeWidth?4.0f:0.0f));
+   if(titleWidth>0)g.DrawString(label.c_str(),int(label.size()),&textFont,Gdiplus::RectF(float(r.left+2),y,titleWidth,float(rowHeight)),&format,&fg);
   }
-  if(drop>=scroll && drop<=scroll+rows){Gdiplus::Pen pen(Gdiplus::Color(255,255,255,255));int y=r.top+(drop-scroll)*14;g.DrawLine(&pen,r.left,y,r.right-1,y);}
+  if(drop>=scroll && drop<=scroll+rows){Gdiplus::Pen pen(Gdiplus::Color(255,255,255,255));int y=r.top+(drop-scroll)*rowHeight;g.DrawLine(&pen,r.left,y,r.right-1,y);}
   g.Restore(clip);
  }
  #include "modern_content.inc"
@@ -569,7 +595,7 @@ struct Modern::Impl {
   // Clear before calling the host: ReleaseCapture sends WM_CAPTURECHANGED.
   if(delegated)Drag(TTP_SKIN_DRAG_END,p);
  }
- int Row(POINT p)const{const int row=scroll+int(p.y-playlistRect.top)/14;return PtInRect(&playlistRect,p) && row>=0 && row<int(StateConst().track_count)?row:-1;}
+ int Row(POINT p)const{const int row=scroll+int(p.y-playlistRect.top)/rowHeight;return PtInRect(&playlistRect,p) && row>=0 && row<int(StateConst().track_count)?row:-1;}
  bool PlaylistHit(POINT p,bool edge=false)const {
   if(edge) {
    if(!PlaylistDropContains(playlistRect,p))return false;
@@ -603,10 +629,11 @@ struct Modern::Impl {
   Slider(n,action==L"seek"?int(fraction*65535):action.starts_with(L"eq_")?int(fraction*254)-127:action.empty()?n->Get(L"low")+int(fraction*(n->Get(L"high",255)-n->Get(L"low"))):int(fraction*255),final);
  }
  LRESULT Message(UINT message,WPARAM wp,LPARAM lp){
+  if(ready && SyncPlaylistFont()){Render();InvalidateRect(window,nullptr,FALSE);}
   POINT p{GET_X_LPARAM(lp),GET_Y_LPARAM(lp)};
   if(message==WM_LBUTTONDOWN || message==WM_RBUTTONDOWN)playlistFocus=PlaylistHit(p);
   if(message==WM_CONTEXTMENU && lp==LPARAM(-1) && playlistFocus && !IsRectEmpty(&playlistRect)) {
-   PlaylistContext(host,window,selected,PlaylistMenuPoint(playlistRect,14,selected,scroll),0,true);return 0;
+   PlaylistContext(host,window,selected,PlaylistMenuPoint(playlistRect,rowHeight,selected,scroll),0,true);return 0;
   }
   LRESULT contentResult{};if(ContentInput(message,wp,lp,contentResult))return contentResult;
   switch(message){
@@ -651,7 +678,7 @@ struct Modern::Impl {
   case WM_RBUTTONDOWN:if(playlistFocus){SetFocus(window);return 0;}break;
   case WM_RBUTTONUP:{auto* n=HitTest(p);if(n && n->attrs[L"param"]==L"guid:pl")PlaylistContext(host,window,Row(p),p,wp);
    else Command(n && n->kind==L"vis"?TTP_SKIN_VISUAL_MENU:TTP_SKIN_MENU);return 0;}
-  case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PlaylistHit(p)){PlaylistWheel(wp,wheel,scroll,int(State().track_count),PlaylistPage(playlistRect,14));InvalidateRect(window,nullptr,FALSE);}
+  case WM_MOUSEWHEEL:ScreenToClient(window,&p);if(PlaylistHit(p)){PlaylistWheel(wp,wheel,scroll,int(State().track_count),PlaylistPage(playlistRect,rowHeight));InvalidateRect(window,nullptr,FALSE);}
    else VolumeWheel(host,GET_WHEEL_DELTA_WPARAM(wp),State().volume);return 0;
   case WM_KEYDOWN:
    if(wp==VK_DELETE && selected>=0){Command(TTP_SKIN_DELETE_SELECTED);return 0;}
@@ -789,6 +816,33 @@ HMENU Modern::Menu(HWND window,uint32_t command){
  AppendMenuW(menu,MF_POPUP,reinterpret_cast<UINT_PTR>(effects),L"视觉效果类型");
  AppendMenuW(menu,MF_STRING,720,L"全屏显示当前内容");return menu;
 }
+bool Modern::DefaultPlaylistFont(LOGFONTW& font)const{font=Impl::DefaultPlaylistFont();return font.lfHeight!=0;}
+bool Modern::PlaylistViewport(HWND window,uint32_t& first,uint32_t& count){
+ if(!window || window!=impl_->window)return Skin::PlaylistViewport(window,first,count);
+ first=count=0;
+ if(!impl_->ready || !IsWindowVisible(window) || IsIconic(window))return true;
+ if(impl_->SyncPlaylistFont() || impl_->revealRow>=0)impl_->Render();
+ RECT client{},visible{};GetClientRect(window,&client);
+ if(!IntersectRect(&visible,&client,&impl_->playlistRect))return true;
+ const int total=int(impl_->State().track_count),height=impl_->rowHeight;
+ const auto& r=impl_->playlistRect;
+ // A sliding drawer can render its list under another skin control.
+ // Use the same hit ordering as mouse input to exclude covered rows.
+ for(int y=visible.top;y<visible.bottom;) {
+  const int offset=(y-r.top)/height,row=impl_->scroll+offset;
+  if(row>=total)break;
+  const int end=std::min(int(visible.bottom),int(r.top)+(offset+1)*height);
+  const int middle=(y+end-1)/2;
+  if(impl_->PlaylistHit({visible.left,middle}) ||
+     impl_->PlaylistHit({(visible.left+visible.right)/2,middle}) ||
+     impl_->PlaylistHit({visible.right-1,middle})) {
+   if(!count)first=uint32_t(row);
+   count=uint32_t(row)-first+1;
+  }
+  y=end;
+ }
+ return true;
+}
 bool Modern::LyricFont(LOGFONTW& font)const{
  // Derive the host's GDI font from the very same pixel font as the embedded
  // playlist. XML text/bitmap fonts belong to other skin controls.
@@ -809,11 +863,12 @@ bool Modern::PlaylistReveal(uint32_t row,int32_t caret){
 bool Modern::PlaylistDrop(TtpSkinPlaylistDrop& drop){
  if(drop.size<sizeof(drop) || drop.window!=impl_->window)return Skin::PlaylistDrop(drop);
  if(drop.phase>TTP_SKIN_DROP_LEAVE)return false;
+ if(impl_->SyncPlaylistFont())impl_->Render();
  drop.insertion=-1;
  const bool inside=impl_->PlaylistHit(drop.point,true);
  int top=impl_->scroll;
  if(drop.phase!=TTP_SKIN_DROP_LEAVE && inside)
-  drop.insertion=PlaylistInsertion(impl_->playlistRect,14,drop.point,top,int(impl_->State().track_count),drop.phase==TTP_SKIN_DROP_PREVIEW);
+  drop.insertion=PlaylistInsertion(impl_->playlistRect,impl_->rowHeight,drop.point,top,int(impl_->State().track_count),drop.phase==TTP_SKIN_DROP_PREVIEW);
  if(drop.phase!=TTP_SKIN_DROP_QUERY){impl_->scroll=top;impl_->drop=drop.insertion;impl_->Render();InvalidateRect(impl_->window,nullptr,FALSE);}
  return inside || drop.phase==TTP_SKIN_DROP_LEAVE;
 }
